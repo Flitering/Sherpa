@@ -22,6 +22,10 @@ export interface LogState {
     mapNameId?: string;
     /** Время начала рейда по логу (мс). */
     raidStart?: number;
+    /** Время последнего выхода из рейда (UserMatchOver), мс. */
+    raidEnd?: number;
+    /** Короткий id рейда из строки создания рейда. */
+    raidId?: string;
     /** Режим последней сессии игры: regular / pve. */
     sessionMode?: string;
     /** События квестов текущей сессии игры. */
@@ -49,6 +53,17 @@ function modeAt(modes: [number, string][], t: number) {
     let mode: string | undefined;
     for (const [mt, md] of modes) if (mt <= t) mode = md;
     return mode ?? modes[0]?.[1];
+}
+
+/** Время последнего «Got notification | UserMatchOver» — игрок вышел из рейда. */
+export function parseRaidEnd(notifText: string): number | undefined {
+    let last: number | undefined;
+    for (const line of notifText.split(/\r?\n/)) {
+        if (!line.includes("UserMatchOver")) continue;
+        const tm = LINE_TIME_RE.exec(line);
+        if (tm) last = toTime(tm[1], tm[2]);
+    }
+    return last;
 }
 
 export function parseTaskEvents(notifText: string, modes: [number, string][]): TaskEvent[] {
@@ -143,6 +158,8 @@ export function watchLogs(dir: FileSystemDirectoryHandle, onState: (s: LogState)
                     onState({
                         mapNameId: last?.[3],
                         raidStart: last ? toTime(last[1], last[2]) : undefined,
+                        raidId: last ? /shortId: ([A-Z0-9]{4,})/.exec(last[0])?.[1] : undefined,
+                        raidEnd: notif.map((n) => parseRaidEnd(n.text)).reduce<number | undefined>((a, b) => (b && (!a || b > a) ? b : a), undefined),
                         sessionMode: modes[modes.length - 1]?.[1],
                         taskEvents: notif.flatMap((n) => parseTaskEvents(n.text, modes)),
                         logFile: latest,

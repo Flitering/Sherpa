@@ -226,6 +226,9 @@ async function buildMode(mode, mapConfigs) {
         trader: t.trader,
         map: mapIdToKey[t.map] ?? null,
         minPlayerLevel: t.minPlayerLevel,
+        // условия открытия: уровень доверия торговца и сюжетные условия (диалог, глобальная переменная)
+        traderReq: (t.traderRequirements ?? []).map((r) => ({ trader: r.trader, type: r.requirementType, value: r.value })),
+        story: (t.otherRequirements ?? []).length > 0 || undefined,
         kappa: !!t.kappaRequired,
         lightkeeper: !!t.lightkeeperRequired,
         faction: t.factionName,

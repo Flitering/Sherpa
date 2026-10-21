@@ -168,7 +168,9 @@ export default function RaidsTab(p: Props) {
                                 <ol className="steps">
                                     {r.steps.map((st, i) => (
                                         <li key={st.stop.id} className={p.detail?.stopId === st.stop.id ? "selected" : ""} onClick={() => p.onFocusStop(st.stop.id, r.index)}>
-                                            <span className="num">{i + 1}</span>
+                                            <span className="num">
+                                                {r.index + 1}.{i + 1}
+                                            </span>
                                             <div>
                                                 <div className="name">
                                                     {st.stop.task.name} <small className="muted">· {fmtMin(st.eta)}</small>

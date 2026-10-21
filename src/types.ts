@@ -46,6 +46,10 @@ export interface Task {
     trader: string;
     map: string | null;
     minPlayerLevel: number;
+    /** Требования к торговцу: уровень доверия (level) или репутация (reputation). */
+    traderReq?: { trader: string; type: string; value: number }[];
+    /** Открывается по сюжету (диалог или сюжетное событие), а не по уровню. */
+    story?: boolean;
     kappa: boolean;
     lightkeeper: boolean;
     faction: string;

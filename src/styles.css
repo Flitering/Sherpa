@@ -360,3 +360,61 @@ path.off-level { stroke-opacity: 0.3; fill-opacity: 0.05; }
 /* килбоксы: чёткие блоки, как на интерактивных картах */
 path.minefield { stroke: #ff3c28; stroke-opacity: 0.95; fill: url(#sherpa-hatch); fill-opacity: 1; }
 path.killbox { stroke: #ff3c28; stroke-dasharray: 6 4; stroke-opacity: 0.95; fill: #ff3c28; fill-opacity: 0.32; }
+
+/* номера точек маршрута в квестах */
+.stop-chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+.stop-chip { display: inline-grid; place-items: center; min-width: 26px; height: 18px; padding: 0 4px; font-size: 11px; font-weight: 800; color: var(--fg); background: #0b0c0a; border: 1.5px solid var(--rc); border-radius: 2px; margin-right: 5px; cursor: pointer; }
+button.stop-chip:hover { background: var(--rc); color: #0b0b09; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
+.steps .num { width: auto; min-width: 28px; padding: 0 3px; font-size: 11px; }
+
+/* мастер первой настройки */
+.modal-back { position: fixed; inset: 0; z-index: 4000; background: #000c; display: grid; place-items: center; padding: 16px; }
+.modal { width: min(640px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; background: linear-gradient(#171814, #0e0f0c); border: 1px solid var(--tan); box-shadow: 0 10px 40px #000; }
+.wiz-head { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line2); text-transform: uppercase; letter-spacing: 0.08em; color: var(--tan); }
+.wiz-steps { display: flex; gap: 4px; flex: 1; justify-content: center; }
+.wiz-dot { width: 26px; height: 26px; padding: 0; justify-content: center; font-size: 12px; }
+.wiz-dot.on { background: var(--fg); color: var(--bg0); }
+.wiz-dot.done { border-color: var(--green); color: var(--green); }
+.wiz-body { padding: 14px 18px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.wiz-body h2 { margin: 0; font-size: 18px; text-transform: uppercase; letter-spacing: 0.08em; }
+.wiz-body p { margin: 0; }
+.wiz-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
+.wiz-note { padding: 8px 10px; border-left: 2px solid var(--green); background: #141a0e; font-size: 13px; }
+.wiz-warn { padding: 8px 10px; border-left: 2px solid var(--red); background: #1e100c; color: #ffb4a6; }
+.wiz-check { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.wiz-check li::before { content: "✗ "; color: var(--red); font-weight: 800; }
+.wiz-check li.ok::before { content: "✓ "; color: var(--green); }
+.wiz-foot { display: flex; justify-content: space-between; padding: 10px 14px; border-top: 1px solid var(--line2); }
+code.copy { display: block; margin: 4px 0; cursor: copy; user-select: all; }
+code.copy:hover { border-color: var(--tan); }
+.setup-btn { margin-left: auto; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+/* плашка «рейд начался» */
+.raid-prompt { position: absolute; z-index: 800; top: 50px; left: 50%; translate: -50% 0; width: min(520px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: #0b0c0af2; border: 1px solid var(--hi); box-shadow: 0 8px 30px #000; animation: rp-in 0.25s ease-out; }
+.raid-prompt.done { border-color: var(--green); cursor: pointer; top: auto; bottom: 30px; }
+.rp-title { font-size: 15px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--hi); }
+.raid-prompt select { width: 100%; }
+@keyframes rp-in { from { opacity: 0; transform: translateY(-8px); } }
+
+/* виджет: перетаскивание и компактный режим */
+.hud-float .hud-top { cursor: grab; user-select: none; touch-action: none; }
+.hud-float .hud-top:active { cursor: grabbing; }
+.hud-top { gap: 8px; align-items: center; }
+.hud-mini { padding: 0 6px; font-size: 13px; line-height: 18px; margin-left: 4px; }
+.hud.compact { gap: 6px; padding: 8px; }
+.hud.compact .hud-arrow { width: 72px; height: 72px; }
+.hud.compact .hud-arrow svg { width: 62px; height: 62px; }
+.hud.compact .hud-dist b { font-size: 28px; }
+.hud-float:has(.hud.compact) { width: 260px; }
+
+/* состояние подключения в шапке */
+.conn { margin-left: auto; display: flex; gap: 4px; }
+.conn + .setup-btn { margin-left: 0; }
+.conn-chip { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 3px 8px; gap: 5px; }
+.conn-chip .led { width: 7px; height: 7px; box-shadow: none; }
+.conn-chip.on .led { background: var(--green); box-shadow: 0 0 5px var(--green); }
+.conn-chip.need-permission { border-color: var(--hi); color: var(--hi); }
+.conn-chip.need-permission .led { background: var(--hi); }
+.conn-chip.error .led { background: var(--red); }
+.conn-chip.raid { color: var(--green); border-color: #4c5f33; cursor: default; }

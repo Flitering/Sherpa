@@ -93,6 +93,21 @@ export async function refineRaids(svc: PathService, map: GameMap, plan: RaidPlan
             return p;
         };
 
+        // линии маршрута: точный поиск «по-человечески» (по середине улиц, с поворотами на перекрёстках)
+        const seq = [...(s0 >= 0 ? [s0] : []), ...order, ...(endBest >= 0 ? [endBest] : [])];
+        const pairs = seq.slice(1).map((pi, k) => [seq[k], pi] as [number, number]);
+        const human = await svc.legs(pairs.map(([x, y]) => [pts[x], pts[y]]));
+        const legOf = (k: number): [number, number][] => {
+            const [x, y] = pairs[k];
+            const hp = human[k];
+            if (!hp || hp.points.length < 2) return leg(x, y);
+            const p = hp.points.slice();
+            p[0] = [pts[x].x, pts[x].z];
+            p[p.length - 1] = [pts[y].x, pts[y].z];
+            return p;
+        };
+        const metersOf = (k: number) => human[k]?.length ?? M(pairs[k][0], pairs[k][1]);
+
         // время и линии
         const speed = settings.speed;
         let t = s0 >= 0 ? 0 : settings.approachMin * 60;
@@ -100,16 +115,18 @@ export async function refineRaids(svc: PathService, map: GameMap, plan: RaidPlan
         let taskSec = 0;
         let lengthM = 0;
         const legs: [number, number][][] = [];
+        let k = 0;
         let prev = s0;
         const steps = order.map((pi) => {
             const st = raid.steps[stepIdx.indexOf(pi)];
             if (prev >= 0) {
-                const d = M(prev, pi);
+                const d = metersOf(k);
                 const tr = (d * CAUTION) / speed;
                 t += tr;
                 travelSec += tr;
                 lengthM += d;
-                legs.push(leg(prev, pi));
+                legs.push(legOf(k));
+                k++;
             }
             const eta = t;
             const w = objectiveSeconds(st.stop);
@@ -119,12 +136,12 @@ export async function refineRaids(svc: PathService, map: GameMap, plan: RaidPlan
             return { ...st, eta };
         });
         if (endBest >= 0) {
-            const d = M(prev, endBest);
+            const d = metersOf(k);
             const tr = (d * CAUTION) / speed + 30;
             t += tr;
             travelSec += tr;
             lengthM += d;
-            legs.push(leg(prev, endBest));
+            legs.push(legOf(k));
         }
         out.push({ ...raid, steps, extract, travelSec, taskSec, totalSec: t, legs, lengthM });
     }

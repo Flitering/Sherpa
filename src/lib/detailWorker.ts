@@ -74,6 +74,83 @@ function snap(cost: Uint8Array, W: number, H: number, c: number, maxR: number): 
     return -1;
 }
 
+/** Отступ от стен внутри зданий: в пределах CLEAR_M шаг дороже — путь идёт серединой комнат и проёмов. */
+const CLEAR_M = 0.9;
+const CLEAR_K = 1.5;
+function clearanceFactor(cost: Uint8Array, W: number, H: number, CELL: number): Float32Array {
+    const INF = 1e9;
+    const d = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) d[i] = cost[i] ? INF : 0;
+    const relax = (i: number, j: number, w: number) => {
+        if (d[j] + w < d[i]) d[i] = d[j] + w;
+    };
+    for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+            const i = y * W + x;
+            if (!d[i]) continue;
+            if (x > 0) relax(i, i - 1, 3);
+            if (y > 0) {
+                relax(i, i - W, 3);
+                if (x > 0) relax(i, i - W - 1, 4);
+                if (x < W - 1) relax(i, i - W + 1, 4);
+            }
+        }
+    for (let y = H - 1; y >= 0; y--)
+        for (let x = W - 1; x >= 0; x--) {
+            const i = y * W + x;
+            if (!d[i]) continue;
+            if (x < W - 1) relax(i, i + 1, 3);
+            if (y < H - 1) {
+                relax(i, i + W, 3);
+                if (x < W - 1) relax(i, i + W + 1, 4);
+                if (x > 0) relax(i, i + W - 1, 4);
+            }
+        }
+    const fct = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) {
+        if (!cost[i]) continue;
+        const near = Math.max(0, CLEAR_M - (d[i] / 3) * CELL) / CLEAR_M;
+        fct[i] = (cost[i] / 10) * (1 + CLEAR_K * near * near);
+    }
+    return fct;
+}
+
+/** Дуглас–Пекер с проверкой проходимости и сохранением отмеченных точек (вход, лестница). */
+function simplifyDP(cost: Uint8Array, W: number, path: number[], keepCells: Set<number>, tol: number): number[] {
+    if (path.length < 3) return path;
+    const keep = new Uint8Array(path.length);
+    keep[0] = keep[path.length - 1] = 1;
+    path.forEach((c, i) => keepCells.has(c) && (keep[i] = 1));
+    const anchors = path.map((_, i) => i).filter((i) => keep[i]);
+    const stack: [number, number][] = [];
+    for (let k = 1; k < anchors.length; k++) stack.push([anchors[k - 1], anchors[k]]);
+    while (stack.length) {
+        const [i, j] = stack.pop()!;
+        if (j - i < 2) continue;
+        const ax = path[i] % W, ay = (path[i] / W) | 0;
+        const bx = path[j] % W, by = (path[j] / W) | 0;
+        const len = Math.hypot(bx - ax, by - ay) || 1;
+        let worst = -1;
+        let wd = 0;
+        let maxCost = 0;
+        for (let k = i + 1; k < j; k++) {
+            const px = path[k] % W, py = (path[k] / W) | 0;
+            const dd = Math.abs((bx - ax) * (ay - py) - (ax - px) * (by - ay)) / len;
+            if (dd > wd) {
+                wd = dd;
+                worst = k;
+            }
+            maxCost = Math.max(maxCost, cost[path[k]]);
+        }
+        if (wd > tol || !visible(cost, W, path[i], path[j], Math.max(cost[path[i]], cost[path[j]], maxCost))) {
+            const k = worst > 0 ? worst : (i + j) >> 1;
+            keep[k] = 1;
+            stack.push([i, k], [k, j]);
+        }
+    }
+    return path.filter((_, k) => keep[k]);
+}
+
 function visible(cost: Uint8Array, W: number, a: number, b: number, limit: number): boolean {
     let x0 = a % W, y0 = (a / W) | 0;
     const x1 = b % W, y1 = (b / W) | 0;
@@ -96,35 +173,12 @@ function visible(cost: Uint8Array, W: number, a: number, b: number, limit: numbe
     }
 }
 
-function smooth(cost: Uint8Array, W: number, path: number[], keep: Set<number>): number[] {
-    if (path.length < 3) return path;
-    const out = [path[0]];
-    let i = 0;
-    while (i < path.length - 1) {
-        let best = i + 1;
-        // прямая не может проходить по клеткам дороже своих концов (иначе срезает сквозь дома)
-        const base = Math.max(cost[path[i]], 13);
-        let fails = 0;
-        for (let j = i + 2; j < path.length; j++) {
-            // не «срезаем» отмеченные точки (вход, лестница)
-            if (keep.has(path[j - 1])) break;
-            const limit = Math.max(base, Math.min(cost[path[j]], cost[path[j - 1]]));
-            if (visible(cost, W, path[i], path[j], limit)) {
-                best = j;
-                fails = 0;
-            } else if (++fails > 60) break;
-        }
-        out.push(path[best]);
-        i = best;
-    }
-    return out;
-}
-
 self.onmessage = (e: MessageEvent) => {
     const m = e.data as { id: number; w: number; h: number; cellMeters: number; layers: LayerIn[]; from: { l: number; c: number }; to: { l: number; c: number } };
     try {
         const { w: W, h: H, cellMeters: CELL, layers } = m;
         const N = W * H;
+        const factors = layers.map((l) => clearanceFactor(l.cost, W, H, CELL));
         const L = layers.length;
         const from = snap(layers[m.from.l].cost, W, H, m.from.c, 60);
         const to = snap(layers[m.to.l].cost, W, H, m.to.c, 60);
@@ -162,7 +216,8 @@ self.onmessage = (e: MessageEvent) => {
                 if (k >= 4 && (!cost[cy * W + x] || !cost[y * W + cx])) continue;
                 const nn = l * N + n;
                 if (done[nn]) continue;
-                const nd = dist[node] + ((cost[c] + cost[n]) / 20) * DL[k] * CELL;
+                const f = factors[l];
+                const nd = dist[node] + ((f[c] + f[n]) / 2) * DL[k] * CELL;
                 if (nd < dist[nn]) {
                     dist[nn] = nd;
                     prev[nn] = node;
@@ -220,7 +275,8 @@ self.onmessage = (e: MessageEvent) => {
             cur.cells.push(c);
         }
         const keep = new Set(events.map((ev) => ev.cell));
-        const out = segments.map((s) => ({ layer: s.layer, cells: Int32Array.from(smooth(layers[s.layer].cost, W, s.cells, keep)) }));
+        // допуск упрощения ~0.4 м: комнаты небольшие, повороты у дверей должны остаться
+        const out = segments.map((s) => ({ layer: s.layer, cells: Int32Array.from(simplifyDP(layers[s.layer].cost, W, s.cells, keep, 0.4 / CELL)) }));
         // настоящая длина: шаги по клеткам + условные метры на каждую лестницу
         let meters = 0;
         for (let i = 1; i < nodes.length; i++) {

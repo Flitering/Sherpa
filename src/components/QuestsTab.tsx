@@ -7,6 +7,12 @@ import ItemIcon from "./ItemIcon";
 type Scope = "map" | "all";
 type Filter = "active" | "available" | "all";
 
+/** Номер точки маршрута для цели: «2.3» — рейд 2, точка 3 (как на карте). */
+export interface StopLabel {
+    label: string;
+    color: string;
+}
+
 interface Props {
     /** Блок распознавания заданий со скриншота. */
     scan?: React.ReactNode;
@@ -14,9 +20,13 @@ interface Props {
     players: Player[];
     mapKey: string;
     mapName: string;
+    /** objectiveId → номер точки маршрута на карте. */
+    stopLabels: Map<string, StopLabel>;
     setTaskStatus: (playerId: string, taskId: string, s: TaskStatus | undefined) => void;
     toggleObjective: (playerId: string, objectiveId: string) => void;
     onFocus: (p: Vec3) => void;
+    /** Показать точку маршрута этой цели на карте (выбрать рейд и построить подробный путь). */
+    onPickStop: (objectiveId: string) => void;
 }
 
 const NEXT: Record<string, TaskStatus | undefined> = { none: "active", active: "done", done: undefined };
@@ -25,6 +35,19 @@ const STATUS_TITLE = { none: "не взят", active: "активен", done: "�
 const PAGE = 60;
 
 export default memo(QuestsTab);
+
+/** Условие открытия квеста вместо «ур. 0»: уровень, торговец, сюжет. */
+export function unlockText(task: Task, bundle: Bundle): string {
+    const parts: string[] = [];
+    if (task.minPlayerLevel > 0) parts.push(`ур. ${task.minPlayerLevel}`);
+    for (const r of task.traderReq ?? []) {
+        const name = bundle.traders[r.trader]?.name ?? "торговец";
+        parts.push(r.type === "level" ? `${name} L${r.value}` : `${name}: репутация ${r.value}`);
+    }
+    if (task.story) parts.push("по сюжету");
+    if (!parts.length) parts.push(task.requires.length ? "после предыдущих" : "сразу");
+    return parts.join(" · ");
+}
 
 function QuestsTab(props: Props) {
     const { bundle, players, mapKey } = props;
@@ -61,9 +84,14 @@ function QuestsTab(props: Props) {
             </div>
             {props.scan}
             <input className="search" placeholder="Поиск по названию или торговцу" value={q} onChange={(e) => setQ(e.target.value)} />
-            <p className="hint">
-                Кружок игрока: нажатие переключает «не взят → активен → выполнен». «Доступные» учитывают уровень и выполненные предыдущие квесты.
-            </p>
+            <div className="legend">
+                {players.map((p, i) => (
+                    <span key={p.id} style={{ color: p.color }}>
+                        <b>{i + 1}</b> — {p.name}
+                    </span>
+                ))}
+                <span className="muted">· кнопка игрока: не взят → ▶ активен → ✓ выполнен</span>
+            </div>
             {list.length === 0 && <p className="empty">{filter === "active" ? "Нет активных квестов. Переключись на «Доступные» и отметь взятые." : "Ничего не найдено."}</p>}
             {list.slice(0, limit).map((t) => (
                 <TaskCard key={t.id} task={t} {...props} open={open === t.id} onToggle={() => setOpen(open === t.id ? null : t.id)} />
@@ -77,9 +105,14 @@ function QuestsTab(props: Props) {
     );
 }
 
-function TaskCard({ task, bundle, players, mapKey, open, onToggle, setTaskStatus, toggleObjective, onFocus }: Props & { task: Task; open: boolean; onToggle: () => void }) {
+function TaskCard({ task, bundle, players, mapKey, open, onToggle, setTaskStatus, toggleObjective, onFocus, stopLabels, onPickStop }: Props & { task: Task; open: boolean; onToggle: () => void }) {
     const trader = bundle.traders[task.trader];
     const mapName = task.map ? bundle.maps.find((m) => m.key === task.map)?.name : undefined;
+    const labels = task.objectives.map((o) => stopLabels.get(o.id)).filter(Boolean) as StopLabel[];
+    const prereq = task.requires
+        .filter((r) => r.status.includes("complete"))
+        .map((r) => bundle.tasks.find((t) => t.id === r.task)?.name)
+        .filter(Boolean);
     return (
         <article className={"card" + (open ? " open" : "")}>
             <div className="card-head" onClick={onToggle}>
@@ -87,14 +120,23 @@ function TaskCard({ task, bundle, players, mapKey, open, onToggle, setTaskStatus
                 <div className="card-title">
                     <div className="name">{task.name}</div>
                     <div className="meta">
-                        {trader?.name} · ур. {task.minPlayerLevel}
+                        {trader?.name} · {unlockText(task, bundle)}
                         {mapName && ` · ${mapName}`}
                         {task.kappa && <span className="badge">Каппа</span>}
                         {task.lightkeeper && <span className="badge lk">Смотритель</span>}
                     </div>
+                    {labels.length > 0 && (
+                        <div className="stop-chips" title="Точки маршрута на карте">
+                            {labels.map((l) => (
+                                <span key={l.label} className="stop-chip" style={{ "--rc": l.color } as React.CSSProperties}>
+                                    {l.label}
+                                </span>
+                            ))}
+                        </div>
+                    )}
                 </div>
                 <div className="who" onClick={(e) => e.stopPropagation()}>
-                    {players.map((p) => {
+                    {players.map((p, i) => {
                         const s = (p.tasks[task.id] as TaskStatus | undefined) ?? "none";
                         const avail = s === "none" && isAvailable(task, p);
                         return (
@@ -102,10 +144,10 @@ function TaskCard({ task, bundle, players, mapKey, open, onToggle, setTaskStatus
                                 key={p.id}
                                 className={`pdot ${s}${avail ? " avail" : ""}`}
                                 style={{ "--c": p.color } as React.CSSProperties}
-                                title={`${p.name}: ${STATUS_TITLE[s]}${avail ? " (доступен)" : ""}`}
+                                title={`${p.name}: ${STATUS_TITLE[s]}${avail ? " (можно взять)" : ""} — нажми, чтобы сменить`}
                                 onClick={() => setTaskStatus(p.id, task.id, NEXT[s])}
                             >
-                                {s === "done" ? "✓" : s === "active" ? "▶" : p.name.slice(0, 1)}
+                                {s === "done" ? "✓" : s === "active" ? "▶" : i + 1}
                             </button>
                         );
                     })}
@@ -114,12 +156,19 @@ function TaskCard({ task, bundle, players, mapKey, open, onToggle, setTaskStatus
             {open && (
                 <div className="card-body">
                     {task.image && <img className="task-image" src={task.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}
+                    {prereq.length > 0 && <div className="hint">Открывается после: {prereq.join(", ")}</div>}
                     <ul className="objectives">
                         {task.objectives.map((o) => {
                             const pts = objectivePoints(o, mapKey);
+                            const lab = stopLabels.get(o.id);
                             return (
                                 <li key={o.id} className={o.optional ? "optional" : ""}>
                                     <div className="obj-line">
+                                        {lab && (
+                                            <button className="stop-chip" style={{ "--rc": lab.color } as React.CSSProperties} title="Показать точку маршрута на карте" onClick={() => onPickStop(o.id)}>
+                                                {lab.label}
+                                            </button>
+                                        )}
                                         <span className="obj-type">{OBJECTIVE_LABEL[o.type] ?? o.type}</span>
                                         <span className="obj-text">
                                             {o.text}
@@ -134,7 +183,7 @@ function TaskCard({ task, bundle, players, mapKey, open, onToggle, setTaskStatus
                                         {o.markerItem && <ItemIcon bundle={bundle} id={o.markerItem} size={28} />}
                                         {o.questItem && <ItemIcon bundle={bundle} id={o.questItem} size={28} />}
                                         {o.keys?.map((alt) => alt.map((k) => <span key={k} className="key-chip">🔑 <ItemIcon bundle={bundle} id={k} size={24} /></span>))}
-                                        {pts.length > 0 && (
+                                        {pts.length > 0 && !lab && (
                                             <button className="link" onClick={() => onFocus(pts[0].position)}>
                                                 на карте{pts.length > 1 ? ` (${pts.length})` : ""}
                                             </button>

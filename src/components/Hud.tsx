@@ -24,6 +24,11 @@ interface Props {
     raidStartFromLog?: number;
     /** Путь от игрока до цели по сетке проходимости. */
     guide?: { points: [number, number][]; length: number; detail?: DetailRoute };
+    /** Компактный вид: стрелка, дистанция, цель и таймер — для окна поверх игры. */
+    compact?: boolean;
+    onToggleCompact?: () => void;
+    /** Верхняя полоса — ручка для перетаскивания плавающего виджета. */
+    onDragStart?: (e: React.PointerEvent) => void;
 }
 
 const LOOKAHEAD_M = 20;
@@ -72,7 +77,7 @@ function screenVec(map: GameMap, fix: PlayerFix | undefined, dx: number, dz: num
     return [lng, -lat];
 }
 
-export default function Hud({ map, session, fix, target, remaining, extract, onDone, onSkip, onStop, raidStartFromLog, guide }: Props) {
+export default function Hud({ map, session, fix, target, remaining, extract, onDone, onSkip, onStop, raidStartFromLog, guide, compact, onToggleCompact, onDragStart }: Props) {
     const now = useNow();
     const start = raidStartFromLog && raidStartFromLog > session.startedAt - 10 * 60_000 ? raidStartFromLog : session.startedAt;
     const elapsed = (now - start) / 1000;
@@ -137,14 +142,20 @@ export default function Hud({ map, session, fix, target, remaining, extract, onD
     const behind = target ? elapsed - target.eta : 0;
 
     return (
-        <div className="hud">
-            <div className="hud-top" style={{ borderColor: session.raid.color }}>
+        <div className={"hud" + (compact ? " compact" : "")}>
+            <div className={"hud-top" + (onDragStart ? " draggable" : "")} style={{ borderColor: session.raid.color }} onPointerDown={onDragStart} title={onDragStart ? "Перетащи, чтобы передвинуть" : undefined}>
                 <span className="hud-raid" style={{ color: session.raid.color }}>
+                    {onDragStart && <span className="grip">⠿ </span>}
                     {session.raid.name}
                 </span>
                 <span className={"hud-timer" + (elapsed > raidSec * 0.85 ? " late" : "")}>
                     {fmt(elapsed)} <small>/ {fmt(raidSec)}</small>
                 </span>
+                {onToggleCompact && (
+                    <button className="hud-mini" onPointerDown={(e) => e.stopPropagation()} onClick={onToggleCompact} title={compact ? "Развернуть" : "Свернуть в компактный вид"}>
+                        {compact ? "▣" : "▭"}
+                    </button>
+                )}
             </div>
 
             <div className="hud-main">
@@ -178,6 +189,22 @@ export default function Hud({ map, session, fix, target, remaining, extract, onD
                 </div>
             </div>
 
+            {compact ? (
+                <div className="hud-target">
+                    <div className="hud-name">{goalName}</div>
+                    {target && (
+                        <div className="hud-obj">
+                            <b>{OBJECTIVE_LABEL[target.stop.objective.type] ?? ""}</b> {target.stop.objective.text}
+                        </div>
+                    )}
+                    {target && (
+                        <button className="primary wide" onClick={onDone}>
+                            ✓ Выполнено
+                        </button>
+                    )}
+                </div>
+            ) : (
+                <>
             <div className="hud-target">
                 <div className="hud-step">
                     {target ? `Точка ${session.raid.steps.indexOf(target) + 1} из ${session.raid.steps.length}` : "Финиш"}
@@ -211,8 +238,10 @@ export default function Hud({ map, session, fix, target, remaining, extract, onD
                 {target && <button onClick={onSkip}>Пропустить</button>}
                 {onStop && <button onClick={onStop}>Закончить</button>}
             </div>
+                </>
+            )}
             <div className="hud-foot">
-                {age === undefined ? "Позиции ещё нет: сделай скриншот в игре" : `позиция ${age} с назад`}
+                {age === undefined ? "Позиции ещё нет: нажми Print Screen в игре" : `позиция ${age} с назад`}
             </div>
         </div>
     );

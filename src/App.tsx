@@ -18,11 +18,13 @@ import {
     type PlayerFix,
 } from "./lib/navigator";
 import MapView, { type MapFocus } from "./components/MapView";
-import QuestsTab from "./components/QuestsTab";
+import QuestsTab, { type StopLabel } from "./components/QuestsTab";
 import RaidsTab from "./components/RaidsTab";
 import LoadoutTab from "./components/LoadoutTab";
 import PlayersTab from "./components/PlayersTab";
 import NavigatorTab, { type NavLink } from "./components/NavigatorTab";
+import SetupWizard from "./components/SetupWizard";
+import RaidPrompt from "./components/RaidPrompt";
 import Hud, { type Session } from "./components/Hud";
 import QuestScan from "./components/QuestScan";
 import MarketTab from "./components/MarketTab";
@@ -33,6 +35,23 @@ import { applyActiveList, applyTaskEvents, type SyncSummary } from "./lib/progre
 
 type Tab = "quests" | "raids" | "loadout" | "market" | "nav" | "players";
 type Which = "shots" | "logs";
+
+/** Короткий сигнал о начале рейда. */
+function beep() {
+    try {
+        const ctx = new AudioContext();
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.frequency.value = 880;
+        g.gain.setValueAtTime(0.08, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+        o.connect(g).connect(ctx.destination);
+        o.start();
+        o.stop(ctx.currentTime + 0.35);
+    } catch {
+        /* звук недоступен — не страшно */
+    }
+}
 
 export default function App() {
     const [state, setState] = usePersistentState();
@@ -64,6 +83,14 @@ export default function App() {
     const [follow, setFollow] = useSticky("follow", true);
     const [autoMap, setAutoMap] = useSticky("autoMap", true);
     const [pip, setPip] = useState<Window | null>(null);
+    const [showSetup, setShowSetup] = useState(() => !state.setupDone);
+    const [lastShot, setLastShot] = useState<string>();
+    /** Время начала рейда (по логу), для которого уже показали предложение. */
+    const [promptedRaid, setPromptedRaid] = useSticky<number>("raid.prompted", 0);
+    const [raidNote, setRaidNote] = useState<string>();
+    // плавающий виджет: позиция и компактный режим запоминаются
+    const [hudPos, setHudPos] = useSticky<{ x: number; y: number } | null>("hud.pos", null);
+    const [hudCompact, setHudCompact] = useSticky("hud.compact", false);
 
     useEffect(() => {
         setBundle(null);
@@ -218,6 +245,33 @@ export default function App() {
     const skip = () => target && setSession((s) => (s ? { ...s, skipped: [...s.skipped, target.stop.id] } : s));
 
 
+    // ---------- рейд по логам ----------
+    const raidStartLog = logState?.raidStart;
+    const raidActive = !!raidStartLog && (!logState?.raidEnd || logState.raidEnd < raidStartLog) && Date.now() - raidStartLog < 75 * 60_000;
+    const showRaidPrompt = !session && raidActive && raidStartLog !== promptedRaid;
+    useEffect(() => {
+        if (!showRaidPrompt) return;
+        beep();
+        if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {
+            const n = new Notification("Sherpa: рейд начался", { body: `${gameMap?.name ?? "Карта"} — открыть навигатор?`, tag: "sherpa-raid" });
+            n.onclick = () => {
+                window.focus();
+                n.close();
+            };
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [showRaidPrompt, raidStartLog]);
+    // выход из рейда (UserMatchOver в логе) — сессия закрывается сама
+    useEffect(() => {
+        const end = logState?.raidEnd;
+        if (!session || !end || end < session.startedAt) return;
+        const done = session.raid.steps.filter(isDone).length;
+        setRaidNote(`Рейд завершён: выполнено ${done} из ${session.raid.steps.length} целей.`);
+        setSession(undefined);
+        pip?.close();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [logState?.raidEnd]);
+
     // ---------- папки игры ----------
     const setLink = (w: Which, l: NavLink) => setLinks((s) => ({ ...s, [w]: l }));
 
@@ -257,7 +311,10 @@ export default function App() {
         if (!h || links.shots.status !== "on") return;
         return watchScreenshots(
             h,
-            (f) => setFix({ ...f, mapKey: mapKeyRef.current }),
+            (f) => {
+                setFix({ ...f, mapKey: mapKeyRef.current });
+                setLastShot(f.file);
+            },
             (e) => setLink("shots", { status: "error", name: h.name, error: e.message }),
         );
     }, [handles.shots, links.shots.status]);
@@ -439,6 +496,33 @@ export default function App() {
     }, [detailSel, plan, gameMap, svc]);
     const mapDetail = session ? guide?.detail : planDetail?.route ?? undefined;
 
+    const mainRef = useRef<HTMLElement>(null);
+    const startHudDrag = (e: React.PointerEvent) => {
+        const box = (e.currentTarget as HTMLElement).closest(".hud-float") as HTMLElement | null;
+        const main = mainRef.current;
+        if (!box || !main) return;
+        e.preventDefault();
+        const m = main.getBoundingClientRect();
+        const b = box.getBoundingClientRect();
+        const dx = e.clientX - b.left;
+        const dy = e.clientY - b.top;
+        const move = (ev: PointerEvent) => {
+            const x = Math.min(Math.max(0, ev.clientX - m.left - dx), m.width - b.width);
+            const y = Math.min(Math.max(0, ev.clientY - m.top - dy), m.height - 40);
+            box.style.left = x + "px";
+            box.style.top = y + "px";
+            box.style.right = "auto";
+            box.style.bottom = "auto";
+        };
+        const up = () => {
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", up);
+            setHudPos({ x: parseFloat(box.style.left) || 0, y: parseFloat(box.style.top) || 0 });
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+    };
+
     const hud =
         session && gameMap ? (
             <Hud
@@ -453,6 +537,8 @@ export default function App() {
                 onStop={stopRaid}
                 raidStartFromLog={logState?.raidStart}
                 guide={guide}
+                compact={hudCompact}
+                onToggleCompact={() => setHudCompact(!hudCompact)}
             />
         ) : null;
 
@@ -465,6 +551,28 @@ export default function App() {
     );
 
     const mapPlan: RaidPlan = useMemo(() => (session ? { ...plan, raids: [{ ...session.raid, index: 0 }] } : plan), [session, plan]);
+
+    // номера точек маршрута для карточек квестов — те же, что на карте
+    const stopLabels = useMemo(() => {
+        const m = new Map<string, StopLabel>();
+        for (const r of mapPlan.raids) r.steps.forEach((st, i) => m.set(st.stop.objective.id, { label: `${r.index + 1}.${i + 1}`, color: r.color }));
+        return m;
+    }, [mapPlan]);
+    const mapPlanRef = useRef(mapPlan);
+    mapPlanRef.current = mapPlan;
+    const pickStop = useCallback(
+        (objectiveId: string) => {
+            for (const r of mapPlanRef.current.raids) {
+                const st = r.steps.find((s) => s.stop.objective.id === objectiveId);
+                if (!st) continue;
+                onSelectStop(st.stop.id, r.index);
+                setTab("quests"); // остаёмся в квестах, карта покажет точку
+                setFocus({ position: st.point, seq: Date.now() });
+                return;
+            }
+        },
+        [onSelectStop, setTab],
+    );
 
     return (
         <MarketContext.Provider value={marketCtx}>
@@ -488,6 +596,34 @@ export default function App() {
                         </button>
                     ))}
                 </nav>
+                <div className="conn">
+                    {(["shots", "logs"] as Which[]).map((w) => {
+                        const l = links[w];
+                        const label = w === "shots" ? "Скриншоты" : "Логи";
+                        const hint =
+                            l.status === "on"
+                                ? `${label}: подключено`
+                                : l.status === "need-permission"
+                                  ? `${label}: браузер снова просит разрешение — нажми`
+                                  : `${label}: не настроено — открыть мастер`;
+                        return (
+                            <button
+                                key={w}
+                                className={"conn-chip " + l.status}
+                                title={hint}
+                                onClick={() => (l.status === "need-permission" ? connect(w) : l.status !== "on" ? setShowSetup(true) : setTab("nav"))}
+                            >
+                                <span className="led" />
+                                {label}
+                                {l.status === "need-permission" && <small> · разрешить</small>}
+                            </button>
+                        );
+                    })}
+                    {session && <span className="conn-chip on raid">● в рейде</span>}
+                </div>
+                <button className="setup-btn" onClick={() => setShowSetup(true)} title="Первая настройка: папки игры, уведомления, группа">
+                    ⚙ Настройка
+                </button>
             </header>
 
             {error && <div className="fatal">{error}</div>}
@@ -495,7 +631,7 @@ export default function App() {
 
             {bundle && gameMap && gear && (
                 <div className="shell">
-                    <main>
+                    <main ref={mainRef}>
                         <MapView
                             bundle={bundle}
                             map={gameMap}
@@ -523,7 +659,31 @@ export default function App() {
                             <label className="check"><input type="checkbox" checked={showOther} onChange={(e) => setShowOther(e.target.checked)} /> невзятые квесты</label>
                             <label className="check"><input type="checkbox" checked={showHazards} onChange={(e) => setShowHazards(e.target.checked)} /> опасности</label>
                         </div>
-                        {hud && !pip && <div className="hud-float">{hud}</div>}
+                        {hud && !pip && (
+                            <div className="hud-float" style={hudPos ? { left: hudPos.x, top: hudPos.y, right: "auto", bottom: "auto" } : undefined}>
+                                {/* ручка перетаскивания — верхняя полоса HUD */}
+                                <div onPointerDown={(e) => (e.target as HTMLElement).closest(".hud-top") && startHudDrag(e)}>{hud}</div>
+                            </div>
+                        )}
+                        {showRaidPrompt && gameMap && raidStartLog && (
+                            <RaidPrompt
+                                mapName={gameMap.name}
+                                startedAt={raidStartLog}
+                                plan={plan}
+                                defaultRaid={sel ?? plan.raids.find((r) => r.best)?.index ?? 0}
+                                onStart={(i, overlay) => {
+                                    setPromptedRaid(raidStartLog);
+                                    startRaid(i);
+                                    if (overlay) openPip();
+                                }}
+                                onDismiss={() => setPromptedRaid(raidStartLog)}
+                            />
+                        )}
+                        {raidNote && (
+                            <div className="raid-prompt done" onClick={() => setRaidNote(undefined)}>
+                                {raidNote} <span className="muted">(нажми, чтобы скрыть)</span>
+                            </div>
+                        )}
                     </main>
                     <aside>
                         <div className="tabs">
@@ -553,6 +713,8 @@ export default function App() {
                                     toggleObjective={toggleObjectiveOne}
                                     onFocus={doFocus}
                                     scan={scanEl}
+                                    stopLabels={stopLabels}
+                                    onPickStop={pickStop}
                                 />
                             )}
                             {tab === "raids" && (
@@ -642,6 +804,24 @@ export default function App() {
                 </div>
             )}
             {pip && hud && createPortal(hud, pip.document.body)}
+            {showSetup && (
+                <SetupWizard
+                    state={state}
+                    setState={setState}
+                    shots={links.shots}
+                    logs={links.logs}
+                    connect={connect}
+                    log={logState}
+                    lastShot={lastShot}
+                    onSyncHistory={syncHistory}
+                    historyProgress={historyProgress}
+                    syncNote={syncNote}
+                    onClose={() => {
+                        setShowSetup(false);
+                        setState((s) => ({ ...s, setupDone: true }));
+                    }}
+                />
+            )}
             <PriceTip />
         </div>
         </MarketContext.Provider>

@@ -338,7 +338,7 @@ function MapView(props: Props) {
                 const target = props.targetStop === s.stop.id;
                 const shared = s.stop.players.length > 1;
                 const cls = "stop" + dim + (done ? " done" : "") + (target ? " target" : "") + (shared ? " shared" : "") + lvl(s.point, pt?.top, pt?.bottom);
-                const label = sel === null ? `${ri + 1}.${i + 1}` : `${i + 1}`;
+                const label = `${ri + 1}.${i + 1}`; // всегда «рейд.точка» — так же, как в карточках квестов
                 const who = s.stop.players.map((p) => `<i style="background:${p.color}"></i>`).join("");
                 const m = L.marker(toLatLng(s.point), {
                     icon: L.divIcon({ className: cls, html: `<span style="--rc:${color}">${done ? "✓" : label}</span><em>${who}</em>`, iconSize: [26, 26] }),

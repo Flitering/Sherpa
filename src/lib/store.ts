@@ -17,6 +17,8 @@ export interface AppState {
     autoSync?: boolean;
     /** Разведцентр 3 уровня: комиссия барахолки −30%. */
     intelCenter?: boolean;
+    /** Мастер первой настройки пройден или закрыт. */
+    setupDone?: boolean;
 }
 
 const KEY = "sherpa:v1";

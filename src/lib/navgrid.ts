@@ -11,7 +11,7 @@ import { makeCRS, toBounds } from "./crs";
 import { classifyHazards, type HazardClasses } from "./hazards";
 
 /** Стоимость клетки ×10: 0 — непроходимо. */
-export const COST = { open: 10, forest: 13, building: 70, locked: 120, rock: 80, water: 150, danger: 250, wall: 0 } as const;
+export const COST = { open: 10, rough: 12, forest: 13, building: 70, locked: 120, rock: 80, water: 150, danger: 250, wall: 0 } as const;
 /** Зона миномётного обстрела: проходимо, но лучше обойти. */
 export const ARTILLERY_COST = 40;
 /**
@@ -62,6 +62,7 @@ export function paintHazards(cost: Uint8Array, w: number, h: number, map: GameMa
 const PALETTE: [number, number, number, number][] = [
     // r, g, b, cost
     [0, 255, 0, COST.open],
+    [0, 255, 255, COST.rough],
     [0, 160, 0, COST.forest],
     [255, 255, 0, COST.building],
     [255, 128, 0, COST.locked],
@@ -71,13 +72,14 @@ const PALETTE: [number, number, number, number][] = [
     [0, 0, 0, COST.wall],
 ];
 const hex = (c: number[]) => "#" + c.slice(0, 3).map((v) => v.toString(16).padStart(2, "0")).join("");
-const C = Object.fromEntries(["open", "forest", "building", "locked", "rock", "water", "danger", "wall"].map((k, i) => [k, hex(PALETTE[i])])) as Record<keyof typeof COST, string>;
+const C = Object.fromEntries(["open", "rough", "forest", "building", "locked", "rock", "water", "danger", "wall"].map((k, i) => [k, hex(PALETTE[i])])) as Record<keyof typeof COST, string>;
 
 // Порядок важен: ниже — сильнее (перекрывает при совпадении специфичности).
 export const RASTER_CSS = `
 * { shape-rendering: crispEdges !important; }
 text, .shadow, .powerline, .task { display: none !important; }
-.cement, .land, .tarmac, .gravel, .floor, .wood, .stairs { fill: ${C.open} !important; }
+.cement, .tarmac, .floor, .wood, .stairs { fill: ${C.open} !important; }
+.land, .gravel { fill: ${C.rough} !important; }
 .road_tarmac, .road_gravel, .railroad { stroke: ${C.open} !important; stroke-dasharray: none !important; }
 .trees { fill: ${C.forest} !important; }
 .building { fill: ${C.building} !important; }
@@ -253,6 +255,15 @@ export class PathService {
         const r = await this.call<{ cells: Int32Array; length: number } | null>({ type: "path", from: this.grid.toCell(a), to: this.grid.toCell(b) });
         if (!r) return null;
         return { points: this.cellsToPoints(r.cells), length: r.length };
+    }
+
+    /** Линии маршрута для пар точек: точный поиск с поворотами и отступом от стен. */
+    async legs(pairs: [Vec3, Vec3][]): Promise<({ points: [number, number][]; length: number } | null)[]> {
+        const r = await this.call<({ cells: Int32Array; length: number } | null)[]>({
+            type: "legs",
+            pairs: pairs.map(([a, b]) => [this.grid.toCell(a), this.grid.toCell(b)]),
+        });
+        return r.map((x) => (x ? { points: this.cellsToPoints(x.cells), length: x.length } : null));
     }
 
     cellsToPoints(cells: Int32Array): [number, number][] {
