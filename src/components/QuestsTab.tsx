@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo } from "react";
+import { useSticky } from "../lib/sticky";
 import type { Bundle, Player, Task, TaskStatus, Vec3 } from "../types";
 import { isAvailable, objectivePoints, OBJECTIVE_LABEL, taskOnMap } from "../lib/quests";
 import ItemIcon from "./ItemIcon";
@@ -21,12 +22,18 @@ interface Props {
 const NEXT: Record<string, TaskStatus | undefined> = { none: "active", active: "done", done: undefined };
 const STATUS_TITLE = { none: "не взят", active: "активен", done: "выполнен" };
 
-export default function QuestsTab(props: Props) {
+const PAGE = 60;
+
+export default memo(QuestsTab);
+
+function QuestsTab(props: Props) {
     const { bundle, players, mapKey } = props;
-    const [scope, setScope] = useState<Scope>("map");
-    const [filter, setFilter] = useState<Filter>("active");
-    const [q, setQ] = useState("");
-    const [open, setOpen] = useState<string | null>(null);
+    const [scope, setScope] = useSticky<Scope>("quests.scope", "map");
+    const [filter, setFilter] = useSticky<Filter>("quests.filter", "active");
+    const [q, setQ] = useSticky("quests.q", "");
+    const [open, setOpen] = useSticky<string | null>("quests.open", null);
+    // длинный список рисуем частями — 500 карточек сразу заметно тормозят
+    const [limit, setLimit] = useSticky("quests.limit", PAGE);
 
     const list = useMemo(() => {
         const query = q.trim().toLowerCase();
@@ -58,9 +65,14 @@ export default function QuestsTab(props: Props) {
                 Кружок игрока: нажатие переключает «не взят → активен → выполнен». «Доступные» учитывают уровень и выполненные предыдущие квесты.
             </p>
             {list.length === 0 && <p className="empty">{filter === "active" ? "Нет активных квестов. Переключись на «Доступные» и отметь взятые." : "Ничего не найдено."}</p>}
-            {list.map((t) => (
+            {list.slice(0, limit).map((t) => (
                 <TaskCard key={t.id} task={t} {...props} open={open === t.id} onToggle={() => setOpen(open === t.id ? null : t.id)} />
             ))}
+            {list.length > limit && (
+                <button className="wide" onClick={() => setLimit(limit + PAGE)}>
+                    Показать ещё ({list.length - limit})
+                </button>
+            )}
         </div>
     );
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useSticky } from "../lib/sticky";
 import type { Bundle, GameMap, Player, Task } from "../types";
 import type { RaidPlan, RaidSettings } from "../lib/raids";
 import { DEFAULT_RAID_SETTINGS, fmtMin } from "../lib/raids";
@@ -23,7 +23,12 @@ interface Props {
     onStart: (raid: number) => void;
     onFocusStop: (stopId: string, raid: number) => void;
     sessionRaid?: string;
-    routesState: "none" | "loading" | "computing" | "real" | "error";
+    routesState: "none" | "loading" | "computing" | "real" | "error" | "straight";
+    routeMode: "real" | "straight";
+    setRouteMode: (m: "real" | "straight") => void;
+    /** Доступные в этом рейде выходы; undefined — все. */
+    availableExtracts?: string[];
+    setAvailableExtracts: (list: string[] | undefined) => void;
     detail?: { stopId: string; route: DetailRoute | null; loading: boolean };
 }
 
@@ -33,10 +38,21 @@ const ROUTES_TEXT = {
     computing: "считаю пути по карте…",
     real: "пути по карте: в обход зданий, заборов и минных полей",
     error: "не удалось построить сетку — пути по прямой",
+    straight: "пути по прямой (выбрано): линии идут сквозь стены и препятствия",
 };
 
 export default function RaidsTab(p: Props) {
-    const [tune, setTune] = useState(false);
+    const [tune, setTune] = useSticky("raids.tune", false);
+    const [exitsOpen, setExitsOpen] = useSticky("raids.exitsOpen", false);
+    const exits = p.map.extracts.filter((e) => e.faction !== "scav");
+    const avail = p.availableExtracts ? new Set(p.availableExtracts) : undefined;
+    const isOn = (name: string) => !avail || avail.has(name);
+    const toggleExit = (name: string) => {
+        const cur = new Set(avail ?? exits.map((e) => e.name));
+        if (cur.has(name)) cur.delete(name);
+        else cur.add(name);
+        p.setAvailableExtracts(cur.size === exits.length ? undefined : [...cur]);
+    };
     const s = p.settings;
     const set = (patch: Partial<RaidSettings>) => p.setSettings({ ...s, ...patch });
     const total = p.plan.raids.reduce((a, r) => a + r.steps.length, 0);
@@ -50,7 +66,42 @@ export default function RaidsTab(p: Props) {
                 </small>
             </div>
 
+            <div className="row">
+                <div className="seg">
+                    <button className={p.routeMode === "real" ? "on" : ""} onClick={() => p.setRouteMode("real")} title="Маршрут по улицам и проходам, в обход препятствий">
+                        Пути по карте
+                    </button>
+                    <button className={p.routeMode === "straight" ? "on" : ""} onClick={() => p.setRouteMode("straight")} title="Прямые линии между точками, сквозь стены">
+                        По прямой
+                    </button>
+                </div>
+            </div>
             <div className={"routes-state " + p.routesState}>{ROUTES_TEXT[p.routesState]}</div>
+
+            <div className="exits">
+                <button className="exits-head" onClick={() => setExitsOpen(!exitsOpen)}>
+                    <span>Выходы в этом рейде</span>
+                    <small>{avail ? `${exits.filter((e) => avail.has(e.name)).length} из ${exits.length}` : "все"}</small>
+                </button>
+                {exitsOpen && (
+                    <>
+                        <p className="hint">Отметь выходы, которые открыты в этом рейде (в игре — клавиша O). Маршрут и выбор рейдов учтут только их.</p>
+                        <div className="exit-chips">
+                            {exits.map((e) => (
+                                <button key={e.name} className={"chip" + (isOn(e.name) ? " on" : "")} onClick={() => toggleExit(e.name)} title={e.paid ? `Платный: ${p.bundle.items[e.paid.item]?.name ?? ""} ×${e.paid.count}` : undefined}>
+                                    {e.name}
+                                    {e.faction === "shared" && <small> · общий</small>}
+                                    {e.paid && <small> · ₽</small>}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="row">
+                            <button onClick={() => p.setAvailableExtracts(undefined)}>Все</button>
+                            <button onClick={() => p.setAvailableExtracts(exits.filter((e) => !e.paid).map((e) => e.name))}>Без платных</button>
+                        </div>
+                    </>
+                )}
+            </div>
             <div className="row">
                 <button className={p.selected === null ? "on" : ""} onClick={() => p.setSelected(null)}>Все рейды</button>
                 <button onClick={() => setTune(!tune)}>{tune ? "Скрыть настройки" : "⚙ Темп"}</button>
@@ -91,7 +142,10 @@ export default function RaidsTab(p: Props) {
                         <header onClick={() => p.setSelected(open ? null : r.index)}>
                             <span className="raid-no">{r.index + 1}</span>
                             <div className="raid-title">
-                                <div className="name">{r.name}</div>
+                                <div className="name">
+                                    {r.name}
+                                    {r.best && <span className="badge best" title="Больше всего целей в минуту при выбранных выходах">★ выгоднее всего</span>}
+                                </div>
                                 <div className="meta">
                                     {r.steps.length} точек{r.shared ? ` · общих ${r.shared}` : ""} ·{" "}
                                     <span className={over ? "warn" : ""}>~{fmtMin(r.totalSec)}</span>

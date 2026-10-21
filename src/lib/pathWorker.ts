@@ -127,6 +127,17 @@ function trace(target: number): number[] {
     return out.reverse();
 }
 
+/** Геометрическая длина цепочки клеток, м. */
+function meters(path: number[] | Int32Array): number {
+    let m = 0;
+    for (let i = 1; i < path.length; i++) {
+        const a = path[i - 1];
+        const b = path[i];
+        m += Math.hypot((a % W) - (b % W), ((a / W) | 0) - ((b / W) | 0));
+    }
+    return m * CELL;
+}
+
 /** Прямая видимость: все клетки отрезка не дороже limit. */
 function visible(a: number, b: number, limit: number): boolean {
     let x0 = a % W, y0 = (a / W) | 0;
@@ -157,14 +168,15 @@ function smooth(path: number[]): Int32Array {
     let i = 0;
     while (i < path.length - 1) {
         let best = i + 1;
-        let limit = Math.max(cost[path[i]], cost[path[i + 1]]);
+        // прямая не может проходить по клеткам дороже своих концов (иначе срезает сквозь дома)
+        const base = Math.max(cost[path[i]], 13);
         let fails = 0;
         for (let j = i + 2; j < path.length; j++) {
-            limit = Math.max(limit, cost[path[j]]);
+            const limit = Math.max(base, Math.min(cost[path[j]], cost[path[j - 1]]));
             if (visible(path[i], path[j], limit)) {
                 best = j;
                 fails = 0;
-            } else if (++fails > 8) break;
+            } else if (++fails > 60) break;
         }
         out.push(path[best]);
         i = best;
@@ -189,19 +201,25 @@ self.onmessage = (e: MessageEvent) => {
             const cells: number[] = m.cells.map(snap);
             const n = cells.length;
             const out = new Float64Array(n * n).fill(Infinity);
+            const len = new Float64Array(n * n).fill(Infinity);
             const paths: (Int32Array | null)[] = new Array(n * n).fill(null);
             for (let i = 0; i < n; i++) {
                 out[i * n + i] = 0;
+                len[i * n + i] = 0;
                 const targets = new Set(cells.filter((_, j) => j > i));
                 if (!targets.size) continue;
                 search(cells[i], targets);
                 for (let j = i + 1; j < n; j++) {
                     const d = dist[cells[j]];
                     out[i * n + j] = out[j * n + i] = d;
-                    if (d < Infinity) paths[i * n + j] = smooth(trace(cells[j]));
+                    if (d < Infinity) {
+                        const p = smooth(trace(cells[j]));
+                        paths[i * n + j] = p;
+                        len[i * n + j] = len[j * n + i] = meters(p);
+                    }
                 }
             }
-            (self as unknown as Worker).postMessage({ id: m.id, result: { dist: out, paths } });
+            (self as unknown as Worker).postMessage({ id: m.id, result: { dist: out, len, paths } });
             return;
         }
         if (m.type === "path") {
@@ -209,7 +227,11 @@ self.onmessage = (e: MessageEvent) => {
             const b = snap(m.to);
             search(a, new Set([b]), b);
             const d = dist[b];
-            const result = d < Infinity ? { cells: smooth(trace(b)), length: d } : null;
+            let result = null;
+            if (d < Infinity) {
+                const cells = smooth(trace(b));
+                result = { cells, length: meters(cells), cost: d };
+            }
             (self as unknown as Worker).postMessage({ id: m.id, result });
         }
     } catch (err) {

@@ -8,9 +8,56 @@
 import L from "leaflet";
 import type { GameMap, Vec3 } from "../types";
 import { makeCRS, toBounds } from "./crs";
+import { classifyHazards, type HazardClasses } from "./hazards";
 
 /** Стоимость клетки ×10: 0 — непроходимо. */
-export const COST = { open: 10, forest: 13, building: 35, locked: 120, rock: 80, water: 150, danger: 250, wall: 0 } as const;
+export const COST = { open: 10, forest: 13, building: 70, locked: 120, rock: 80, water: 150, danger: 250, wall: 0 } as const;
+/** Зона миномётного обстрела: проходимо, но лучше обойти. */
+export const ARTILLERY_COST = 40;
+/**
+ * Зоны снайперов-диких: внутри карты это места их появления (на Улицах в такой зоне даже стоит
+ * квестовый банкомат), а смертельные края карты отмечены в самой SVG — поэтому лишь небольшой штраф.
+ */
+export const SNIPER_COST = 25;
+/** Метка килбокса при раскраске: клетка становится непроходимой. */
+const KILLBOX = -1;
+
+/**
+ * Опасные зоны (минные поля, снайперы, обстрел) поверх сетки.
+ * toGrid — перевод игровой точки в координаты сетки (дробные клетки).
+ */
+export function paintHazards(cost: Uint8Array, w: number, h: number, map: GameMap, toGrid: (p: { x: number; z: number }) => [number, number], classes: HazardClasses) {
+    const zones: { outline: [number, number][]; value: number }[] = [];
+    // килбоксы (мины, края карты) — непроходимы; «горячие» зоны внутри карты — штраф
+    for (const hz of classes.killbox) zones.push({ outline: hz.outline!, value: KILLBOX });
+    for (const hz of classes.heat) zones.push({ outline: hz.outline!, value: SNIPER_COST });
+    for (const a of map.artillery ?? []) if (a.outline?.length) zones.push({ outline: a.outline, value: ARTILLERY_COST });
+    if (!zones.length) return;
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext("2d", { willReadFrequently: true })!;
+    for (const value of [SNIPER_COST, ARTILLERY_COST, KILLBOX]) {
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = "#fff";
+        for (const z of zones) {
+            if (z.value !== value) continue;
+            ctx.beginPath();
+            z.outline.forEach(([x, zz], i) => {
+                const [gx, gy] = toGrid({ x, z: zz });
+                if (i) ctx.lineTo(gx, gy);
+                else ctx.moveTo(gx, gy);
+            });
+            ctx.closePath();
+            ctx.fill();
+        }
+        const px = ctx.getImageData(0, 0, w, h).data;
+        for (let i = 0; i < w * h; i++) {
+            if (px[i * 4 + 3] <= 100 || !cost[i]) continue;
+            cost[i] = value === KILLBOX ? 0 : Math.max(cost[i], value);
+        }
+    }
+}
 
 const PALETTE: [number, number, number, number][] = [
     // r, g, b, cost
@@ -20,7 +67,7 @@ const PALETTE: [number, number, number, number][] = [
     [255, 128, 0, COST.locked],
     [128, 0, 255, COST.rock],
     [0, 0, 255, COST.water],
-    [255, 0, 0, COST.danger],
+    [255, 0, 0, COST.wall],
     [0, 0, 0, COST.wall],
 ];
 const hex = (c: number[]) => "#" + c.slice(0, 3).map((v) => v.toString(16).padStart(2, "0")).join("");
@@ -123,6 +170,17 @@ export async function buildNavGrid(map: GameMap, svgText: string): Promise<NavGr
         const px = ctx.getImageData(0, 0, w, h).data;
 
         const cost = classifyOutdoor(px, w * h);
+        paintHazards(
+            cost,
+            w,
+            h,
+            map,
+            (p) => {
+                const pt = crs.latLngToPoint(L.latLng(p.z, p.x), 0);
+                return [((pt.x - rect.min!.x) / rw) * w, ((pt.y - rect.min!.y) / rh) * h];
+            },
+            await classifyHazards(map, svgText),
+        );
 
         const toCell = (p: { x: number; z: number }) => {
             const pt = crs.latLngToPoint(L.latLng(p.z, p.x), 0);
@@ -145,8 +203,10 @@ export async function buildNavGrid(map: GameMap, svgText: string): Promise<NavGr
 // ---------------- клиент воркера ----------------
 
 export interface MatrixResult {
-    /** dist[i * n + j] — длина пути в метрах (Infinity — недостижимо). */
+    /** dist[i * n + j] — «стоимость» пути с учётом штрафов (для выбора порядка точек). */
     dist: Float64Array;
+    /** len[i * n + j] — настоящая длина пути, м (Infinity — недостижимо). */
+    len: Float64Array;
     /** paths[i * n + j] — клетки пути i→j (только для i < j; обратный путь — reverse). */
     paths: (Int32Array | null)[];
 }

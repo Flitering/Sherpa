@@ -170,7 +170,24 @@ async function buildMode(mode, mapConfigs) {
                 outline: outline(e.outline),
                 top: e.top,
                 bottom: e.bottom,
+                // платный выход (предмет и количество) и выход, которому нужен рубильник
+                paid: e.transferItem?.item ? { item: useItem(e.transferItem.item), count: e.transferItem.count } : undefined,
+                needsSwitch: e.switch === true || undefined,
             })),
+            hazards: (main.hazards ?? []).map((h) => ({
+                type: h.hazardType,
+                name: mt(h.name),
+                position: pos(h.position),
+                outline: outline(h.outline),
+                top: h.top != null ? round(h.top) : undefined,
+                bottom: h.bottom != null ? round(h.bottom) : undefined,
+            })),
+            stationary: (main.stationaryWeapons ?? []).map((w) => {
+                const def = maps.data.stationaryWeapons?.[w.stationaryWeapon];
+                const nn = def?.normalizedName ?? "";
+                return { type: nn.includes("ags") ? "ags" : nn.includes("utyos") || nn.includes("nsv") ? "utes" : "mg", name: mt(def?.shortName ?? def?.name ?? ""), position: pos(w.position) };
+            }),
+            artillery: (main.artillery?.zones ?? []).map((z) => ({ position: pos(z.position), outline: outline(z.outline) })),
             transits: (main.transits ?? []).map((t) => ({
                 name: mt(t.description),
                 position: pos(t.position),

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSticky } from "../lib/sticky";
 import type { GameMode } from "../types";
 import { advise, DEMAND_RU, rub, useMarket, type MarketItem } from "../lib/market";
 import { captureScreen, latestScreenshot, matchItems, normalize, recognize } from "../lib/ocr";
@@ -27,7 +28,7 @@ function loadLoot(mode: string): LootRow[] {
 
 export default function MarketTab({ mode, onRefresh, setIntel, shotsDir }: Props) {
     const { market, intel, showTip, hideTip, traders } = useMarket();
-    const [q, setQ] = useState("");
+    const [q, setQ] = useSticky("market.q", "");
     const [loot, setLoot] = useState<LootRow[]>(() => loadLoot(mode));
     const [busy, setBusy] = useState<string>();
     const [note, setNote] = useState<string>();

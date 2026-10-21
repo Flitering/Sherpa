@@ -338,3 +338,25 @@ path.off-level { stroke-opacity: 0.3; fill-opacity: 0.05; }
 .mk-advice.is-trader { color: var(--blue); }
 .mk-qty { display: flex; gap: 4px; align-items: center; }
 .mk-qty input { width: 54px; }
+
+/* выходы этого рейда */
+.exits { border: 1px solid var(--line); background: #0e0f0c; }
+.exits-head { width: 100%; justify-content: space-between; background: transparent; border: none; text-transform: uppercase; font-size: 12px; letter-spacing: 0.05em; color: var(--tan); }
+.exits-head small { color: var(--dim); text-transform: none; }
+.exits .hint, .exits .row, .exit-chips { padding: 0 8px; }
+.exits .row { padding-bottom: 8px; }
+.exit-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.chip { font-size: 12px; padding: 3px 8px; opacity: 0.45; text-decoration: line-through; }
+.chip.on { opacity: 1; text-decoration: none; border-color: var(--green); color: var(--fg); background: #18200f; }
+.badge.best { color: #0b0b09; background: var(--hi); border-color: var(--hi); }
+.extract.unavailable { opacity: 0.35; filter: grayscale(1); }
+
+/* стационарное оружие */
+.stationary { white-space: nowrap; font-size: 10px; font-weight: 900; color: #0b0b09; background: #ff9a3d; border: 1px solid #000; padding: 0 4px; translate: -50% -50%; width: auto !important; height: auto !important; box-shadow: 0 0 4px #000; }
+.stationary.ags { background: #ff4d3d; color: #fff; }
+.heatmap { pointer-events: none; image-rendering: auto; }
+.heat-hit { cursor: help; }
+
+/* килбоксы: чёткие блоки, как на интерактивных картах */
+path.minefield { stroke: #ff3c28; stroke-opacity: 0.95; fill: url(#sherpa-hatch); fill-opacity: 1; }
+path.killbox { stroke: #ff3c28; stroke-dasharray: 6 4; stroke-opacity: 0.95; fill: #ff3c28; fill-opacity: 0.32; }

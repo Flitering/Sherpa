@@ -65,6 +65,8 @@ export interface Raid {
     taskSec: number;
     totalSec: number;
     shared: number;
+    /** Самый выгодный рейд по числу целей в минуту (с учётом выбранных выходов). */
+    best?: boolean;
     /** Реальные пути по сетке проходимости: спавн→1, 1→2, …, последняя→выход. */
     legs?: [number, number][][];
     /** Длина пути по сетке, м. */
@@ -77,7 +79,13 @@ export interface RaidPlan {
     raidSec: number;
 }
 
-const pmcExtracts = (m: GameMap) => m.extracts.filter((e) => e.faction !== "scav");
+/** Выходы ЧВК; если задан список доступных в этом рейде — только они (пустой выбор = все). */
+export function pmcExtracts(m: GameMap, allowed?: Set<string>) {
+    const all = m.extracts.filter((e) => e.faction !== "scav");
+    if (!allowed) return all;
+    const only = all.filter((e) => allowed.has(e.name));
+    return only.length ? only : all;
+}
 
 function nearest<T extends { position: Vec3 }>(list: T[], p: Vec3): T | undefined {
     let best: T | undefined;
@@ -115,11 +123,11 @@ function districtName(map: GameMap, points: Vec3[]): string {
         .join(" · ");
 }
 
-export function planRaids(map: GameMap, stops: Stop[], settings: RaidSettings, extractOverride?: Record<number, string>): RaidPlan {
+export function planRaids(map: GameMap, stops: Stop[], settings: RaidSettings, extractOverride?: Record<number, string>, allowed?: Set<string>): RaidPlan {
     const raidSec = (map.raidDuration ?? 40) * 60;
     const budgetSec = raidSec * settings.budgetShare;
     const travel = (a: Vec3, b: Vec3) => (dist(a, b) * settings.detour) / settings.speed;
-    const extracts = pmcExtracts(map);
+    const extracts = pmcExtracts(map, allowed);
     const spawns = map.spawns;
 
     const approach = (p: Vec3) => {
@@ -231,7 +239,18 @@ export function planRaids(map: GameMap, stops: Stop[], settings: RaidSettings, e
             r.extract = e;
         }
     });
+    markBest(raids);
     return { raids, budgetSec, raidSec };
+}
+
+/** Отметить рейд с наибольшим числом целей в минуту. */
+export function markBest(raids: Raid[]) {
+    let best: Raid | undefined;
+    for (const r of raids) {
+        r.best = false;
+        if (r.steps.length && (!best || r.steps.length / r.totalSec > best.steps.length / best.totalSec)) best = r;
+    }
+    if (best && raids.length > 1) best.best = true;
 }
 
 export const fmtMin = (sec: number) => `${Math.max(1, Math.round(sec / 60))} мин`;

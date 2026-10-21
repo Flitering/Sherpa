@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { GameMap, MapPoint, Vec3 } from "../types";
 import type { Raid, RaidStep } from "../lib/raids";
 import { relativeBearing, type PlayerFix } from "../lib/navigator";
@@ -14,7 +15,6 @@ interface Props {
     map: GameMap;
     session: Session;
     fix?: PlayerFix;
-    now: number;
     target?: RaidStep;
     remaining: RaidStep[];
     extract?: MapPoint;
@@ -44,6 +44,16 @@ function lookahead(points: [number, number][]): { x: number; z: number } {
 
 const FLOOR_M = 3.2;
 
+/** Текущее время раз в секунду — только для HUD, не для всего приложения. */
+function useNow() {
+    const [now, setNow] = useState(Date.now());
+    useEffect(() => {
+        const t = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(t);
+    }, []);
+    return now;
+}
+
 const fmt = (sec: number) => {
     const s = Math.max(0, Math.floor(sec));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -62,7 +72,8 @@ function screenVec(map: GameMap, fix: PlayerFix | undefined, dx: number, dz: num
     return [lng, -lat];
 }
 
-export default function Hud({ map, session, fix, now, target, remaining, extract, onDone, onSkip, onStop, raidStartFromLog, guide }: Props) {
+export default function Hud({ map, session, fix, target, remaining, extract, onDone, onSkip, onStop, raidStartFromLog, guide }: Props) {
+    const now = useNow();
     const start = raidStartFromLog && raidStartFromLog > session.startedAt - 10 * 60_000 ? raidStartFromLog : session.startedAt;
     const elapsed = (now - start) / 1000;
     const raidSec = (map.raidDuration ?? 40) * 60;

@@ -1,6 +1,6 @@
 // Цены барахолки и торговцев: загрузка, обновление с tarkov.dev, комиссия и рекомендация.
 
-import { createContext, useContext } from "react";
+import { createContext, useContext, useSyncExternalStore } from "react";
 import type { GameMode } from "../types";
 
 export interface MarketItem {
@@ -163,6 +163,31 @@ export const DEMAND_RU: Record<Demand, string> = {
     flat: "стабильно",
     unknown: "нет данных",
 };
+
+// ---------------- подсказка по наведению: маленькое внешнее хранилище ----------------
+// Наведение мыши не должно перерисовывать всё приложение — подписан только сам PriceTip.
+
+export type Tip = { id: string; rect: DOMRect } | null;
+let tip: Tip = null;
+const listeners = new Set<() => void>();
+export function showTip(id: string, rect: DOMRect) {
+    tip = { id, rect };
+    listeners.forEach((l) => l());
+}
+export function hideTip() {
+    if (!tip) return;
+    tip = null;
+    listeners.forEach((l) => l());
+}
+export function useTip(): Tip {
+    return useSyncExternalStore(
+        (l) => {
+            listeners.add(l);
+            return () => listeners.delete(l);
+        },
+        () => tip,
+    );
+}
 
 // ---------------- контекст для подсказок по наведению ----------------
 

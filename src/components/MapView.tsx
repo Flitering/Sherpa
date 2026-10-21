@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import type { Bundle, GameMap, LayerExtent, MapLayer, Vec3 } from "../types";
 import { makeCRS, onLevel, toBounds, toLatLng } from "../lib/crs";
@@ -8,6 +8,8 @@ import type { PlayerFix } from "../lib/navigator";
 import { labelRu } from "../lib/labels-ru";
 import { loadSvgText } from "../lib/useNavGrid";
 import { layerRu, type DetailRoute } from "../lib/navdetail";
+import { heatmapFor } from "../lib/heatmap";
+import { classifyHazards, type HazardClasses } from "../lib/hazards";
 
 export interface MapFocus {
     position: Vec3;
@@ -26,6 +28,9 @@ interface Props {
     showOther: boolean;
     showExtracts: boolean;
     showLabels: boolean;
+    showHazards: boolean;
+    /** Выходы, доступные в этом рейде (по названию). undefined — все. */
+    availableExtracts?: Set<string>;
     fix?: PlayerFix;
     /** Путь игрок → цель (навигатор). */
     guide?: [number, number][];
@@ -38,14 +43,17 @@ interface Props {
 }
 
 
-export default function MapView(props: Props) {
+export default memo(MapView);
+
+function MapView(props: Props) {
     const { map: gameMap } = props;
     const display = gameMap.display;
     const el = useRef<HTMLDivElement>(null);
     const lmap = useRef<L.Map>();
-    const overlay = useRef<L.LayerGroup>();
-    const playerLayer = useRef<L.LayerGroup>();
+    const layers = useRef<Record<"labels" | "hazards" | "extracts" | "other" | "raids" | "player", L.LayerGroup>>({} as never);
     const detailLayer = useRef<L.LayerGroup>();
+    /** Счётчик пересоздания карты: слои перерисовываются после смены локации/подложки. */
+    const [mapGen, setMapGen] = useState(0);
     const base = useRef<{ svg?: SVGSVGElement; image?: L.ImageOverlay; url?: string; tile?: L.TileLayer }>({});
     const [level, setLevel] = useState(-1);
     const [svgReady, setSvgReady] = useState(0);
@@ -103,9 +111,9 @@ export default function MapView(props: Props) {
                 .catch(() => !cancelled && el.current?.classList.add("no-basemap"));
         }
         m.fitBounds(bounds);
-        overlay.current = L.layerGroup().addTo(m);
-        playerLayer.current = L.layerGroup().addTo(m);
+        for (const k of ["hazards", "labels", "extracts", "other", "raids", "player"] as const) layers.current[k] = L.layerGroup().addTo(m);
         detailLayer.current = L.layerGroup().addTo(m);
+        setMapGen((n) => n + 1);
         const onZoom = () => setZoom(m.getZoom());
         m.on("zoomend", onZoom);
         onZoom();
@@ -142,95 +150,161 @@ export default function MapView(props: Props) {
         if (tile && display.tilePath) tile.setUrl(layer?.tilePath ?? display.tilePath);
     }, [level, svgReady, display, levels, useTile]);
 
-    // ---- метки ----
+    // ---- метки: отдельные слои, каждый перерисовывается только при своих изменениях ----
+    const lvl = (p: Vec3, top?: number, bottom?: number) => (onLevel(p, activeExtents, top, bottom) ? "" : " off-level");
+    const onSelectRef = useRef(props.onSelectStop);
+    onSelectRef.current = props.onSelectStop;
+    const onTakeRef = useRef(props.onTakeTask);
+    onTakeRef.current = props.onTakeTask;
+
+    // подписи районов: зависят только от «ступени» зума
+    const sizes = useMemo(() => [...new Set(display.labels.map((l) => l.size))].sort((a, b) => b - a), [display]);
+    const labelMin = sizes[Math.min(Math.max(0, Math.floor(zoom - display.minZoom - 0.5)), sizes.length - 1)] ?? 0;
     useEffect(() => {
-        const g = overlay.current;
+        const g = layers.current.labels;
         if (!g) return;
         g.clearLayers();
-        const lvl = (p: Vec3, top?: number, bottom?: number) => (onLevel(p, activeExtents, top, bottom) ? "" : " off-level");
-
-        if (props.showLabels) {
-            // при отдалении — только крупные подписи, с приближением добавляются мелкие
-            const sizes = [...new Set(display.labels.map((l) => l.size))].sort((a, b) => b - a);
-            const tier = Math.max(0, Math.floor(zoom - display.minZoom - 0.5));
-            const minSize = sizes[Math.min(tier, sizes.length - 1)] ?? 0;
-            for (const l of display.labels) {
-                if (l.size < minSize) continue;
-                L.marker(toLatLng(l), {
-                    icon: L.divIcon({
-                        className: "map-label" + (l.size >= 60 ? " big" : ""),
-                        html: `<span style="transform: rotate(${l.rotation}deg)">${escapeHtml(labelRu(l.text))}</span>`,
-                        iconSize: [0, 0],
-                    }),
-                    interactive: false,
-                    keyboard: false,
-                }).addTo(g);
-            }
+        if (!props.showLabels) return;
+        for (const l of display.labels) {
+            if (l.size < labelMin) continue;
+            L.marker(toLatLng(l), {
+                icon: L.divIcon({
+                    className: "map-label" + (l.size >= 60 ? " big" : ""),
+                    html: `<span style="transform: rotate(${l.rotation}deg)">${escapeHtml(labelRu(l.text))}</span>`,
+                    iconSize: [0, 0],
+                }),
+                interactive: false,
+                keyboard: false,
+            }).addTo(g);
         }
+    }, [props.showLabels, labelMin, display, mapGen]);
 
-        const sel = props.selectedRaid;
-        const raidOf = (i: number) => props.plan.raids[i];
-        const activeRaid = sel !== null ? raidOf(sel) : undefined;
-
-        if (props.showExtracts) {
-            for (const e of gameMap.extracts) {
-                if (e.faction === "scav") continue;
-                const chosen = activeRaid?.extract?.name === e.name;
-                L.marker(toLatLng(e.position), {
-                    icon: L.divIcon({
-                        className: "extract" + (e.faction === "shared" ? " shared" : "") + (chosen ? " chosen" : "") + lvl(e.position),
-                        html: chosen ? "EXIT" : "▲",
-                        iconSize: chosen ? [40, 18] : [18, 18],
-                    }),
-                    keyboard: false,
-                    zIndexOffset: chosen ? 900 : 0,
-                })
-                    .bindTooltip(`Выход: ${e.name}${e.faction === "shared" ? " (общий)" : ""}`, { direction: "top" })
-                    .addTo(g);
-            }
-            for (const t of gameMap.transits) {
-                L.marker(toLatLng(t.position), {
-                    icon: L.divIcon({ className: "transit" + lvl(t.position), html: "⇄", iconSize: [18, 18] }),
-                    keyboard: false,
-                })
-                    .bindTooltip(t.name, { direction: "top" })
-                    .addTo(g);
-            }
+    // опасные зоны: килбоксы (мины, края карты) — чёткими блоками; зоны внутри карты — тепловой картой
+    const [hzClasses, setHzClasses] = useState<HazardClasses | null>(null);
+    useEffect(() => {
+        let cancelled = false;
+        setHzClasses(null);
+        (gameMap.display.svgPath ? loadSvgText(gameMap.display.svgPath) : Promise.resolve(null))
+            .then((text) => classifyHazards(gameMap, text))
+            .then((r) => !cancelled && setHzClasses(r))
+            .catch(() => !cancelled && setHzClasses({ killbox: gameMap.hazards.filter((h) => h.outline), heat: [] }));
+        return () => {
+            cancelled = true;
+        };
+    }, [gameMap]);
+    useEffect(() => {
+        const g = layers.current.hazards;
+        if (!g || !hzClasses) return;
+        g.clearLayers();
+        if (!props.showHazards) return;
+        const ll = (o: [number, number][]) => o.map(([x, z]) => toLatLng({ x, z }));
+        // тепло: снайперские зоны внутри карты, обстрел, стационарное оружие
+        const heat = heatmapFor(gameMap, hzClasses.heat);
+        if (heat) L.imageOverlay(heat.url, heat.bounds, { className: "heatmap", interactive: false }).addTo(g);
+        // невидимые контуры для подсказок над теплом
+        const tipZone = (outline: [number, number][], text: string) =>
+            L.polygon(ll(outline), { stroke: false, fillOpacity: 0, className: "heat-hit" }).bindTooltip(text, { sticky: true }).addTo(g);
+        for (const a of gameMap.artillery) if (a.outline) tipZone(a.outline, "Зона миномётного обстрела (во время обстрела — укрыться)");
+        for (const h of hzClasses.heat) tipZone(h.outline!, "Работают снайперы-дикие: простреливается, проходить быстро");
+        // килбоксы — чёткие блоки, маршрут через них не идёт
+        for (const h of hzClasses.killbox) {
+            const mine = h.type === "minefield";
+            L.polygon(ll(h.outline!), { className: mine ? "minefield" : "killbox", weight: 2 })
+                .bindTooltip(mine ? "Минное поле — не заходить" : "Килбокс: простреливается снайперами, проход закрыт", { sticky: true })
+                .addTo(g);
         }
+        ensureHatch(lmap.current);
+        for (const s of gameMap.stationary) {
+            L.marker(toLatLng(s.position), {
+                icon: L.divIcon({ className: "stationary " + s.type + lvl(s.position), html: s.type === "ags" ? "АГС" : "У", iconSize: [0, 0] }),
+                keyboard: false,
+            })
+                .bindTooltip(s.type === "ags" ? "АГС-30 — станковый гранатомёт" : (s.name || "НСВ Утёс") + " — крупнокалиберный пулемёт", { direction: "top" })
+                .addTo(g);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [props.showHazards, gameMap, hzClasses, activeExtents, mapGen]);
 
-        if (props.showOther) {
-            for (const task of props.otherTasks) {
-                for (const o of task.objectives) {
-                    for (const pt of objectivePoints(o, gameMap.key)) {
-                        const popup = document.createElement("div");
-                        popup.className = "popup";
-                        const b = document.createElement("b");
-                        b.textContent = task.name;
-                        const d = document.createElement("div");
-                        d.className = "muted";
-                        d.textContent = o.text;
-                        const btn = document.createElement("button");
-                        btn.textContent = "Взять квест";
-                        btn.onclick = () => props.onTakeTask(task.id);
-                        popup.append(b, d, btn);
-                        L.circleMarker(toLatLng(pt.position), {
-                            radius: pt.kind === "item" ? 3.5 : 5,
-                            className: "other-point" + lvl(pt.position, pt.top, pt.bottom),
-                        })
-                            .bindPopup(popup)
-                            .addTo(g);
-                    }
+    // выходы и переходы
+    const sel = props.selectedRaid;
+    const chosenExtract = sel !== null ? props.plan.raids[sel]?.extract?.name : undefined;
+    useEffect(() => {
+        const g = layers.current.extracts;
+        if (!g) return;
+        g.clearLayers();
+        if (!props.showExtracts) return;
+        for (const e of gameMap.extracts) {
+            if (e.faction === "scav") continue;
+            const chosen = chosenExtract === e.name;
+            const off = props.availableExtracts && !props.availableExtracts.has(e.name);
+            const cond = e.paid ? " · платный" : e.needsSwitch ? " · нужен рубильник" : "";
+            L.marker(toLatLng(e.position), {
+                icon: L.divIcon({
+                    className: "extract" + (e.faction === "shared" ? " shared" : "") + (chosen ? " chosen" : "") + (off ? " unavailable" : "") + lvl(e.position),
+                    html: chosen ? "EXIT" : "▲",
+                    iconSize: chosen ? [40, 18] : [18, 18],
+                }),
+                keyboard: false,
+                zIndexOffset: chosen ? 900 : 0,
+            })
+                .bindTooltip(`Выход: ${e.name}${e.faction === "shared" ? " (общий)" : ""}${cond}${off ? " — недоступен в этом рейде" : ""}`, { direction: "top" })
+                .addTo(g);
+        }
+        for (const t of gameMap.transits) {
+            L.marker(toLatLng(t.position), {
+                icon: L.divIcon({ className: "transit" + lvl(t.position), html: "⇄", iconSize: [18, 18] }),
+                keyboard: false,
+            })
+                .bindTooltip(t.name, { direction: "top" })
+                .addTo(g);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [props.showExtracts, props.availableExtracts, chosenExtract, gameMap, activeExtents, mapGen]);
+
+    // невзятые квесты
+    useEffect(() => {
+        const g = layers.current.other;
+        if (!g) return;
+        g.clearLayers();
+        if (!props.showOther) return;
+        for (const task of props.otherTasks) {
+            for (const o of task.objectives) {
+                for (const pt of objectivePoints(o, gameMap.key)) {
+                    const popup = document.createElement("div");
+                    popup.className = "popup";
+                    const b = document.createElement("b");
+                    b.textContent = task.name;
+                    const d = document.createElement("div");
+                    d.className = "muted";
+                    d.textContent = o.text;
+                    const btn = document.createElement("button");
+                    btn.textContent = "Взять квест";
+                    btn.onclick = () => onTakeRef.current(task.id);
+                    popup.append(b, d, btn);
+                    L.circleMarker(toLatLng(pt.position), {
+                        radius: pt.kind === "item" ? 3.5 : 5,
+                        className: "other-point" + lvl(pt.position, pt.top, pt.bottom),
+                    })
+                        .bindPopup(popup)
+                        .addTo(g);
                 }
             }
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [props.showOther, props.otherTasks, gameMap.key, activeExtents, mapGen]);
 
-        // рейды: неактивные — бледно, выбранный — ярко
+    // рейды: неактивные — бледно, выбранный — ярко
+    const faintRoutes = !!props.detail;
+    useEffect(() => {
+        const g = layers.current.raids;
+        if (!g) return;
+        g.clearLayers();
+        const raidOf = (i: number) => props.plan.raids[i];
         const order = props.plan.raids.map((r) => r.index).sort((a, b) => (a === sel ? 1 : b === sel ? -1 : 0));
         for (const ri of order) {
             const raid = raidOf(ri);
             const dim = sel !== null && ri !== sel ? " dim" : "";
-            // при открытом подробном пути общие линии отходят на второй план
-            const faint = props.detail ? " faint" : "";
+            const faint = faintRoutes ? " faint" : "";
             const color = raid.color;
             for (const st of raid.steps) {
                 for (const pt of st.stop.points) {
@@ -251,7 +325,7 @@ export default function MapView(props: Props) {
                 if (raid.spawn) line.push(toLatLng(raid.spawn));
                 raid.steps.forEach((s) => line.push(toLatLng(s.point)));
                 if (raid.extract) line.push(toLatLng(raid.extract.position));
-                if (line.length > 1) L.polyline(line, { color, className: "route-line" + dim, interactive: false }).addTo(g);
+                if (line.length > 1) L.polyline(line, { color, className: "route-line" + dim + faint, interactive: false }).addTo(g);
             }
             if (raid.spawn && !dim) {
                 L.marker(toLatLng(raid.spawn), { icon: L.divIcon({ className: "spawn-pin", html: "S", iconSize: [18, 18] }) })
@@ -271,16 +345,17 @@ export default function MapView(props: Props) {
                     zIndexOffset: dim ? 0 : 1000,
                 });
                 m.bindTooltip(`<b>${escapeHtml(s.stop.task.name)}</b><br>${escapeHtml(s.stop.objective.text)}`, { direction: "top", offset: [0, -12] });
-                m.on("click", () => props.onSelectStop(s.stop.id, ri));
+                m.on("click", () => onSelectRef.current(s.stop.id, ri));
                 m.addTo(g);
             });
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [props.plan, props.selectedRaid, props.doneStops, props.targetStop, props.otherTasks, props.showOther, props.showExtracts, props.showLabels, props.detail, activeExtents, gameMap.key, useTile, zoom]);
+    }, [props.plan, sel, props.doneStops, props.targetStop, faintRoutes, activeExtents, mapGen]);
 
     // ---- игрок ----
+    // Без зависимости от зума: раньше слежение дёргало карту обратно после каждого приближения.
     useEffect(() => {
-        const g = playerLayer.current;
+        const g = layers.current.player;
         const m = lmap.current;
         if (!g || !m) return;
         g.clearLayers();
@@ -289,7 +364,7 @@ export default function MapView(props: Props) {
         if (props.guide && props.guide.length > 1) {
             L.polyline(props.guide.map(([x, z]) => toLatLng({ x, z })), { className: "guide-line", interactive: false }).addTo(g);
         }
-        // Экранный угол взгляда: проецируем точку чуть впереди игрока.
+        // Экранный угол взгляда: проецируем точку чуть впереди игрока (поворот карты от зума не зависит).
         let angle = 0;
         if (fix.forward) {
             const a = m.latLngToLayerPoint(toLatLng(fix.position));
@@ -305,12 +380,17 @@ export default function MapView(props: Props) {
             zIndexOffset: 2000,
             interactive: false,
         }).addTo(g);
-        if (props.follow) {
-            // на общем плане центр ограничен краями карты — для слежения приближаемся
-            const z = Math.max(m.getZoom(), display.minZoom + 2);
-            m.setView(toLatLng(fix.position), z, { animate: true });
-        }
-    }, [props.fix, props.guide, props.follow, gameMap.key, useTile, zoom]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [props.fix, props.guide, mapGen]);
+
+    // слежение — только когда пришла новая позиция
+    useEffect(() => {
+        const m = lmap.current;
+        const fix = props.fix;
+        if (!m || !fix || !props.follow) return;
+        m.setView(toLatLng(fix.position), Math.max(m.getZoom(), display.minZoom + 2), { animate: true });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [props.fix?.time, props.follow]);
 
     // ---- подробный маршрут ----
     const currentSvgLayer = level >= 0 ? levels[level]?.svgLayer ?? null : null;
@@ -384,6 +464,30 @@ export default function MapView(props: Props) {
             </div>
         </div>
     );
+}
+
+/** Штриховка минных полей: узор в SVG-слое Leaflet (один раз на карту). */
+function ensureHatch(m: L.Map | undefined) {
+    const svg = m?.getPanes().overlayPane.querySelector("svg");
+    if (!svg || svg.querySelector("#sherpa-hatch")) return;
+    const NS = "http://www.w3.org/2000/svg";
+    const defs = svg.querySelector("defs") ?? svg.insertBefore(document.createElementNS(NS, "defs"), svg.firstChild);
+    const p = document.createElementNS(NS, "pattern");
+    p.setAttribute("id", "sherpa-hatch");
+    p.setAttribute("patternUnits", "userSpaceOnUse");
+    p.setAttribute("width", "8");
+    p.setAttribute("height", "8");
+    p.setAttribute("patternTransform", "rotate(45)");
+    const bg = document.createElementNS(NS, "rect");
+    bg.setAttribute("width", "8");
+    bg.setAttribute("height", "8");
+    bg.setAttribute("fill", "rgba(255,60,40,0.18)");
+    const line = document.createElementNS(NS, "rect");
+    line.setAttribute("width", "3");
+    line.setAttribute("height", "8");
+    line.setAttribute("fill", "rgba(255,60,40,0.7)");
+    p.append(bg, line);
+    defs.appendChild(p);
 }
 
 function escapeHtml(s: string) {

@@ -3,14 +3,14 @@
 import type { GameMap, MapPoint, Vec3 } from "../types";
 import type { PathService } from "./navgrid";
 import { dist as straight, } from "./route";
-import { objectiveSeconds, type Raid, type RaidPlan, type RaidSettings } from "./raids";
+import { markBest, objectiveSeconds, pmcExtracts, type Raid, type RaidPlan, type RaidSettings } from "./raids";
 
 /** Небольшой запас на осторожность: даже по реальному пути идут не по идеальной линии. */
 const CAUTION = 1.1;
 
-export async function refineRaids(svc: PathService, map: GameMap, plan: RaidPlan, settings: RaidSettings, extractOverride?: Record<number, string>): Promise<Raid[]> {
+export async function refineRaids(svc: PathService, map: GameMap, plan: RaidPlan, settings: RaidSettings, extractOverride?: Record<number, string>, allowed?: Set<string>): Promise<Raid[]> {
     const out: Raid[] = [];
-    const pmc = map.extracts.filter((e) => e.faction !== "scav");
+    const pmc = pmcExtracts(map, allowed);
     for (const raid of plan.raids) {
         if (!raid.steps.length) {
             out.push(raid);
@@ -25,11 +25,16 @@ export async function refineRaids(svc: PathService, map: GameMap, plan: RaidPlan
         const s0 = raid.spawn ? (pts.push(raid.spawn), 0) : -1;
         const stepIdx = raid.steps.map((st) => pts.push(st.point) - 1);
         const endIdx = endCands.map((e) => pts.push(e.position) - 1);
-        const { dist, paths } = await svc.matrix(pts);
+        const { dist, len, paths } = await svc.matrix(pts);
         const n = pts.length;
         const D = (a: number, b: number) => {
             const d = dist[a * n + b];
-            return Number.isFinite(d) ? d : straight(pts[a], pts[b]) * 3; // недостижимо по сетке — штраф
+            return Number.isFinite(d) ? d : straight(pts[a], pts[b]) * 30; // недостижимо по сетке — сильный штраф
+        };
+        /** Метры по реальному пути; если пути нет — по прямой. */
+        const M = (a: number, b: number) => {
+            const m = len[a * n + b];
+            return Number.isFinite(m) ? m : straight(pts[a], pts[b]);
         };
 
         // порядок: 2-opt + перенос одной точки, на настоящих расстояниях
@@ -99,7 +104,7 @@ export async function refineRaids(svc: PathService, map: GameMap, plan: RaidPlan
         const steps = order.map((pi) => {
             const st = raid.steps[stepIdx.indexOf(pi)];
             if (prev >= 0) {
-                const d = D(prev, pi);
+                const d = M(prev, pi);
                 const tr = (d * CAUTION) / speed;
                 t += tr;
                 travelSec += tr;
@@ -114,7 +119,7 @@ export async function refineRaids(svc: PathService, map: GameMap, plan: RaidPlan
             return { ...st, eta };
         });
         if (endBest >= 0) {
-            const d = D(prev, endBest);
+            const d = M(prev, endBest);
             const tr = (d * CAUTION) / speed + 30;
             t += tr;
             travelSec += tr;
@@ -123,5 +128,6 @@ export async function refineRaids(svc: PathService, map: GameMap, plan: RaidPlan
         }
         out.push({ ...raid, steps, extract, travelSec, taskSec, totalSec: t, legs, lengthM });
     }
+    markBest(out);
     return out;
 }

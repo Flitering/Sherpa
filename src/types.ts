@@ -112,6 +112,24 @@ export interface MapPoint {
     position: Vec3;
     outline?: Outline;
     faction?: string;
+    /** Платный выход: id предмета и количество. */
+    paid?: { item: string; count: number };
+    needsSwitch?: boolean;
+}
+
+export interface Hazard {
+    /** minefield, sniper, hazard */
+    type: string;
+    name: string;
+    position: Vec3;
+    outline?: Outline;
+}
+
+export interface StationaryWeapon {
+    /** utes — НСВ «Утёс», ags — АГС-30 */
+    type: "utes" | "ags" | "mg";
+    name: string;
+    position: Vec3;
 }
 
 export interface GameMap {
@@ -128,6 +146,10 @@ export interface GameMap {
     extracts: MapPoint[];
     transits: MapPoint[];
     spawns: { zone: string; position: Vec3 }[];
+    hazards: Hazard[];
+    stationary: StationaryWeapon[];
+    /** Зоны миномётного обстрела. */
+    artillery: { position: Vec3; outline?: Outline }[];
 }
 
 export interface Bundle {

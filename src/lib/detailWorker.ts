@@ -102,16 +102,17 @@ function smooth(cost: Uint8Array, W: number, path: number[], keep: Set<number>):
     let i = 0;
     while (i < path.length - 1) {
         let best = i + 1;
-        let limit = Math.max(cost[path[i]], cost[path[i + 1]]);
+        // прямая не может проходить по клеткам дороже своих концов (иначе срезает сквозь дома)
+        const base = Math.max(cost[path[i]], 13);
         let fails = 0;
         for (let j = i + 2; j < path.length; j++) {
             // не «срезаем» отмеченные точки (вход, лестница)
             if (keep.has(path[j - 1])) break;
-            limit = Math.max(limit, cost[path[j]]);
+            const limit = Math.max(base, Math.min(cost[path[j]], cost[path[j - 1]]));
             if (visible(cost, W, path[i], path[j], limit)) {
                 best = j;
                 fails = 0;
-            } else if (++fails > 12) break;
+            } else if (++fails > 60) break;
         }
         out.push(path[best]);
         i = best;
@@ -220,7 +221,16 @@ self.onmessage = (e: MessageEvent) => {
         }
         const keep = new Set(events.map((ev) => ev.cell));
         const out = segments.map((s) => ({ layer: s.layer, cells: Int32Array.from(smooth(layers[s.layer].cost, W, s.cells, keep)) }));
-        (self as unknown as Worker).postMessage({ id: m.id, result: { segments: out, events, length: dist[dst], from, to } });
+        // настоящая длина: шаги по клеткам + условные метры на каждую лестницу
+        let meters = 0;
+        for (let i = 1; i < nodes.length; i++) {
+            const la = (nodes[i - 1] / N) | 0;
+            const lb = (nodes[i] / N) | 0;
+            const a = nodes[i - 1] - la * N;
+            const b = nodes[i] - lb * N;
+            meters += la !== lb ? 4 : Math.hypot((a % W) - (b % W), ((a / W) | 0) - ((b / W) | 0)) * CELL;
+        }
+        (self as unknown as Worker).postMessage({ id: m.id, result: { segments: out, events, length: meters, from, to } });
     } catch (err) {
         (self as unknown as Worker).postMessage({ id: m.id, error: String(err) });
     }

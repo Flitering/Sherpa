@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSticky } from "../lib/sticky";
 import type { Bundle, Player } from "../types";
 import { captureScreen, latestScreenshot, matchTasks, recognize, type TaskMatch } from "../lib/ocr";
 import { inferCompleted } from "../lib/progressSync";
@@ -13,7 +14,7 @@ interface Props {
 
 /** Распознавание списка заданий со скриншота: найденные — активные, их предшественники — выполнены. */
 export default function QuestScan({ bundle, players, activePlayer, shotsDir, onApply }: Props) {
-    const [open, setOpen] = useState(false);
+    const [open, setOpen] = useSticky("scan.open", false);
     const [busy, setBusy] = useState<string>();
     const [matches, setMatches] = useState<TaskMatch[]>();
     const [checked, setChecked] = useState<Set<string>>(new Set());

@@ -1,7 +1,8 @@
-import { advise, DEMAND_RU, rub, useMarket } from "../lib/market";
+import { advise, DEMAND_RU, rub, useMarket, useTip } from "../lib/market";
 
 /** Подсказка с ценами при наведении на иконку предмета. */
-export default function PriceTip({ tip }: { tip: { id: string; rect: DOMRect } | null }) {
+export default function PriceTip() {
+    const tip = useTip();
     const { market, intel, traders } = useMarket();
     if (!tip || !market) return null;
     const item = market.byId.get(tip.id);

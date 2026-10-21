@@ -6,6 +6,7 @@ import { activeStops, loadout, objectivePoints, taskOnMap } from "./lib/quests";
 import { DEFAULT_RAID_SETTINGS, planRaids, type Raid, type RaidPlan, type RaidSettings, type RaidStep } from "./lib/raids";
 import { refineRaids } from "./lib/realRoutes";
 import { loadSvgText, useNavGrid } from "./lib/useNavGrid";
+import { useSticky } from "./lib/sticky";
 import { detailRoute, type DetailRoute } from "./lib/navdetail";
 import { dist as straightDist } from "./lib/route";
 import {
@@ -26,7 +27,7 @@ import Hud, { type Session } from "./components/Hud";
 import QuestScan from "./components/QuestScan";
 import MarketTab from "./components/MarketTab";
 import PriceTip from "./components/PriceTip";
-import { loadMarket, MarketContext, refreshMarket, type Market } from "./lib/market";
+import { hideTip, loadMarket, MarketContext, refreshMarket, showTip, type Market } from "./lib/market";
 import { scanTaskHistory, watchLogs, type LogState } from "./lib/gamelogs";
 import { applyActiveList, applyTaskEvents, type SyncSummary } from "./lib/progressSync";
 
@@ -37,16 +38,21 @@ export default function App() {
     const [state, setState] = usePersistentState();
     const [bundle, setBundle] = useState<Bundle | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [tab, setTab] = useState<Tab>("quests");
+    const [tab, setTab] = useSticky<Tab>("tab", "quests");
     const [focus, setFocus] = useState<MapFocus>();
 
     // планирование
-    const [selectedRaid, setSelectedRaid] = useState<Record<string, number | null>>({});
-    const [extractOverride, setExtractOverride] = useState<Record<string, Record<number, string>>>({});
-    const [includeShoot, setIncludeShoot] = useState(false);
-    const [showOther, setShowOther] = useState(false);
-    const [showExtracts, setShowExtracts] = useState(true);
-    const [showLabels, setShowLabels] = useState(true);
+    const [selectedRaid, setSelectedRaid] = useSticky<Record<string, number | null>>("selectedRaid", {});
+    const [extractOverride, setExtractOverride] = useSticky<Record<string, Record<number, string>>>("extractOverride", {});
+    const [includeShoot, setIncludeShoot] = useSticky("includeShoot", false);
+    const [showOther, setShowOther] = useSticky("showOther", false);
+    const [showExtracts, setShowExtracts] = useSticky("showExtracts", true);
+    const [showLabels, setShowLabels] = useSticky("showLabels", true);
+    const [showHazards, setShowHazards] = useSticky("showHazards", true);
+    /** Пути: по сетке карты или прямыми линиями. */
+    const [routeMode, setRouteMode] = useSticky<"real" | "straight">("routeMode", "real");
+    /** Выходы, доступные в текущем рейде, по картам. Нет записи — доступны все. */
+    const [availEx, setAvailEx] = useSticky<Record<string, string[]>>("availableExtracts", {});
     const raidSettings: RaidSettings = state.raidSettings ?? DEFAULT_RAID_SETTINGS;
 
     // навигатор
@@ -55,10 +61,9 @@ export default function App() {
     const [logState, setLogState] = useState<LogState>();
     const [links, setLinks] = useState<Record<Which, NavLink>>({ shots: { status: "off" }, logs: { status: "off" } });
     const [handles, setHandles] = useState<Partial<Record<Which, FileSystemDirectoryHandle>>>({});
-    const [follow, setFollow] = useState(true);
-    const [autoMap, setAutoMap] = useState(true);
+    const [follow, setFollow] = useSticky("follow", true);
+    const [autoMap, setAutoMap] = useSticky("autoMap", true);
     const [pip, setPip] = useState<Window | null>(null);
-    const [now, setNow] = useState(Date.now());
 
     useEffect(() => {
         setBundle(null);
@@ -79,7 +84,6 @@ export default function App() {
 
     // ---------- цены ----------
     const [market, setMarket] = useState<Market | null>(null);
-    const [tip, setTip] = useState<{ id: string; rect: DOMRect } | null>(null);
     useEffect(() => {
         setMarket(null);
         loadMarket(state.mode).then(setMarket).catch((e) => console.warn(e));
@@ -89,34 +93,38 @@ export default function App() {
             market,
             intel: !!state.intelCenter,
             traders: bundle?.traders ?? {},
-            showTip: (id: string, rect: DOMRect) => setTip({ id, rect }),
-            hideTip: () => setTip(null),
+            showTip,
+            hideTip,
         }),
         [market, state.intelCenter, bundle],
     );
 
     // ---------- рейды ----------
+    const allowedExtracts = useMemo(() => (availEx[mapKey] ? new Set(availEx[mapKey]) : undefined), [availEx, mapKey]);
     const stops = useMemo(() => (bundle && gameMap ? activeStops(bundle, state.players, mapKey, includeShoot) : []), [bundle, gameMap, state.players, mapKey, includeShoot]);
     const rawPlan: RaidPlan = useMemo(
-        () => (gameMap ? planRaids(gameMap, stops, raidSettings, extractOverride[mapKey]) : { raids: [], budgetSec: 0, raidSec: 0 }),
-        [gameMap, stops, raidSettings, extractOverride, mapKey],
+        () => (gameMap ? planRaids(gameMap, stops, raidSettings, extractOverride[mapKey], allowedExtracts) : { raids: [], budgetSec: 0, raidSec: 0 }),
+        [gameMap, stops, raidSettings, extractOverride, mapKey, allowedExtracts],
     );
 
     // Реальные пути по сетке проходимости: считаются в фоне, до готовности — прямые линии.
-    const { svc, status: navStatus } = useNavGrid(gameMap);
+    const { svc: gridSvc, status: navStatus } = useNavGrid(gameMap);
+    // «По прямой» — сервис путей не используется вовсе
+    const svc = routeMode === "real" ? gridSvc : null;
     const [refined, setRefined] = useState<{ from: RaidPlan; raids: Raid[] }>();
     useEffect(() => {
         if (!svc || !gameMap || !rawPlan.raids.length) return;
         let cancelled = false;
-        refineRaids(svc, gameMap, rawPlan, raidSettings, extractOverride[mapKey])
+        refineRaids(svc, gameMap, rawPlan, raidSettings, extractOverride[mapKey], allowedExtracts)
             .then((raids) => !cancelled && setRefined({ from: rawPlan, raids }))
             .catch((e) => console.warn("Не удалось уточнить пути:", e));
         return () => {
             cancelled = true;
         };
-    }, [svc, rawPlan, gameMap, raidSettings, extractOverride, mapKey]);
-    const plan: RaidPlan = useMemo(() => (refined?.from === rawPlan ? { ...rawPlan, raids: refined.raids } : rawPlan), [refined, rawPlan]);
-    const routesState = navStatus === "ready" ? (refined?.from === rawPlan || !rawPlan.raids.length ? "real" : "computing") : navStatus;
+    }, [svc, rawPlan, gameMap, raidSettings, extractOverride, mapKey, allowedExtracts]);
+    const plan: RaidPlan = useMemo(() => (svc && refined?.from === rawPlan ? { ...rawPlan, raids: refined.raids } : rawPlan), [svc, refined, rawPlan]);
+    const routesState =
+        routeMode === "straight" ? "straight" : navStatus === "ready" ? (refined?.from === rawPlan || !rawPlan.raids.length ? "real" : "computing") : navStatus;
     const sel = selectedRaid[mapKey] ?? null;
     const setSel = (i: number | null) => setSelectedRaid((s) => ({ ...s, [mapKey]: i }));
 
@@ -209,11 +217,6 @@ export default function App() {
     const markDone = () => target && setObjective(target.stop.players.map((p) => p.id), target.stop.objective.id, true);
     const skip = () => target && setSession((s) => (s ? { ...s, skipped: [...s.skipped, target.stop.id] } : s));
 
-    useEffect(() => {
-        if (!session) return;
-        const t = setInterval(() => setNow(Date.now()), 1000);
-        return () => clearInterval(t);
-    }, [session]);
 
     // ---------- папки игры ----------
     const setLink = (w: Which, l: NavLink) => setLinks((s) => ({ ...s, [w]: l }));
@@ -365,7 +368,21 @@ export default function App() {
         setPip(w);
     };
 
-    const doFocus = (position: Vec3) => setFocus({ position, seq: Date.now() });
+    const doFocus = useCallback((position: Vec3) => setFocus({ position, seq: Date.now() }), []);
+    const toggleObjectiveOne = useCallback((pid: string, oid: string) => setObjective([pid], oid, "toggle"), [setObjective]);
+    const [detailSel, setDetailSel] = useState<{ raid: number; stopId: string }>();
+    const sessionRef = useRef(session);
+    sessionRef.current = session;
+    const onSelectStop = useCallback(
+        (stopId: string, raid: number) => {
+            if (!sessionRef.current) {
+                setSelectedRaid((s) => ({ ...s, [mapKeyRef.current]: raid }));
+                setDetailSel({ raid, stopId });
+            }
+            setTab(sessionRef.current ? "nav" : "raids");
+        },
+        [setSelectedRaid, setTab],
+    );
     const visibleFix = fix && fix.mapKey === mapKey ? fix : undefined;
 
     // Путь для навигатора: по общей сетке, а у цели (≤140 м) — подробный, через двери и лестницы.
@@ -393,13 +410,12 @@ export default function App() {
     }, [svc, visibleFix, goal, gameMap]);
 
     // Подробный путь к выбранной цели в режиме планирования (клик по точке).
-    const [detailSel, setDetailSel] = useState<{ raid: number; stopId: string }>();
     const [planDetail, setPlanDetail] = useState<{ stopId: string; route: DetailRoute | null; loading: boolean }>();
     useEffect(() => setDetailSel(undefined), [mapKey]);
     useEffect(() => {
         const raid = detailSel ? plan.raids[detailSel.raid] : undefined;
         const i = raid ? raid.steps.findIndex((st) => st.stop.id === detailSel!.stopId) : -1;
-        if (!raid || i < 0 || !gameMap?.display.svgPath) {
+        if (!raid || i < 0 || !gameMap?.display.svgPath || !svc) {
             setPlanDetail(undefined);
             return;
         }
@@ -429,7 +445,6 @@ export default function App() {
                 map={gameMap}
                 session={session}
                 fix={visibleFix}
-                now={now}
                 target={target}
                 remaining={remaining}
                 extract={session.raid.extract}
@@ -440,6 +455,14 @@ export default function App() {
                 guide={guide}
             />
         ) : null;
+
+    const applyScannedRef = useRef(applyScanned);
+    applyScannedRef.current = applyScanned;
+    const shotsDir = links.shots.status === "on" ? handles.shots : undefined;
+    const scanEl = useMemo(
+        () => (bundle ? <QuestScan bundle={bundle} players={state.players} activePlayer={state.activePlayer} shotsDir={shotsDir} onApply={(p, ids) => applyScannedRef.current(p, ids)} /> : null),
+        [bundle, state.players, state.activePlayer, shotsDir],
+    );
 
     const mapPlan: RaidPlan = useMemo(() => (session ? { ...plan, raids: [{ ...session.raid, index: 0 }] } : plan), [session, plan]);
 
@@ -490,18 +513,15 @@ export default function App() {
                             follow={follow && !!session}
                             onTakeTask={takeTask}
                             focus={focus}
-                            onSelectStop={(stopId, raid) => {
-                                if (!session) {
-                                    setSel(raid);
-                                    setDetailSel({ raid, stopId });
-                                }
-                                setTab(session ? "nav" : "raids");
-                            }}
+                            onSelectStop={onSelectStop}
+                            showHazards={showHazards}
+                            availableExtracts={allowedExtracts}
                         />
                         <div className="map-toggles">
                             <label className="check"><input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} /> районы</label>
                             <label className="check"><input type="checkbox" checked={showExtracts} onChange={(e) => setShowExtracts(e.target.checked)} /> выходы</label>
                             <label className="check"><input type="checkbox" checked={showOther} onChange={(e) => setShowOther(e.target.checked)} /> невзятые квесты</label>
+                            <label className="check"><input type="checkbox" checked={showHazards} onChange={(e) => setShowHazards(e.target.checked)} /> опасности</label>
                         </div>
                         {hud && !pip && <div className="hud-float">{hud}</div>}
                     </main>
@@ -530,9 +550,9 @@ export default function App() {
                                     mapKey={mapKey}
                                     mapName={gameMap.name}
                                     setTaskStatus={setTaskStatus}
-                                    toggleObjective={(pid, oid) => setObjective([pid], oid, "toggle")}
+                                    toggleObjective={toggleObjectiveOne}
                                     onFocus={doFocus}
-                                    scan={<QuestScan bundle={bundle} players={state.players} activePlayer={state.activePlayer} shotsDir={links.shots.status === "on" ? handles.shots : undefined} onApply={applyScanned} />}
+                                    scan={scanEl}
                                 />
                             )}
                             {tab === "raids" && (
@@ -559,6 +579,17 @@ export default function App() {
                                     }}
                                     sessionRaid={session?.raid.name}
                                     routesState={routesState}
+                                    routeMode={routeMode}
+                                    setRouteMode={setRouteMode}
+                                    availableExtracts={availEx[mapKey]}
+                                    setAvailableExtracts={(list) =>
+                                        setAvailEx((all) => {
+                                            const next = { ...all };
+                                            if (list) next[mapKey] = list;
+                                            else delete next[mapKey];
+                                            return next;
+                                        })
+                                    }
                                     detail={planDetail}
                                 />
                             )}
@@ -611,7 +642,7 @@ export default function App() {
                 </div>
             )}
             {pip && hud && createPortal(hud, pip.document.body)}
-            <PriceTip tip={tip} />
+            <PriceTip />
         </div>
         </MarketContext.Provider>
     );
