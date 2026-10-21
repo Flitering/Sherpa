@@ -1,0 +1,237 @@
+// Разбиение целей карты на рейды: районы + реалистичная оценка времени.
+//
+// 1. Строим один общий обход всех точек (ближайший сосед + 2-opt) — соседние в обходе
+//    точки географически близки.
+// 2. Режем обход на непрерывные куски так, чтобы каждый кусок укладывался в бюджет
+//    времени рейда (динамическое программирование: минимум рейдов, затем минимум времени).
+// 3. Для каждого куска заново строим маршрут: от ближайшего спавна до ближайшего выхода.
+// 4. Называем рейд по ближайшим подписям карты (районам).
+
+import type { GameMap, MapPoint, Vec3 } from "../types";
+import { labelRu } from "./labels-ru";
+import type { Stop } from "./quests";
+import { dist, planRoute } from "./route";
+
+export interface RaidSettings {
+    /** Средняя скорость с учётом осторожного движения, м/с. */
+    speed: number;
+    /** Во сколько раз реальный путь длиннее прямой (обход зданий, заборов). */
+    detour: number;
+    /** Какую долю времени рейда можно планировать (остальное — бой, лут, запас). */
+    budgetShare: number;
+    /** Время от спавна до первой точки, если спавны карты неизвестны, мин. */
+    approachMin: number;
+}
+
+export const DEFAULT_RAID_SETTINGS: RaidSettings = { speed: 2.2, detour: 1.35, budgetShare: 0.6, approachMin: 2 };
+
+/** Сколько секунд занимает цель на месте. */
+const OBJECTIVE_SECONDS: Record<string, number> = {
+    visit: 25,
+    mark: 40,
+    plantItem: 50,
+    plantQuestItem: 50,
+    findQuestItem: 70,
+    useItem: 40,
+    shoot: 240,
+    findItem: 60,
+};
+
+export function objectiveSeconds(s: Stop): number {
+    const base = OBJECTIVE_SECONDS[s.objective.type] ?? 40;
+    // Квестовый предмет может лежать в нескольких местах — закладываем осмотр пары соседних.
+    const extra = s.objective.type === "findQuestItem" ? Math.min(s.points.length - 1, 2) * 35 : 0;
+    return base + extra;
+}
+
+export const RAID_COLORS = ["#d8b45a", "#5fb4d6", "#94c95d", "#d9708f", "#ae92e6", "#e3904f", "#5fd1b0", "#c9c45a"];
+
+export interface RaidStep {
+    stop: Stop;
+    point: Vec3;
+    /** Время прибытия от начала рейда, с. */
+    eta: number;
+}
+
+export interface Raid {
+    index: number;
+    color: string;
+    name: string;
+    steps: RaidStep[];
+    spawn?: Vec3;
+    extract?: MapPoint;
+    /** Оценка, с: дорога, задания, весь рейд. */
+    travelSec: number;
+    taskSec: number;
+    totalSec: number;
+    shared: number;
+    /** Реальные пути по сетке проходимости: спавн→1, 1→2, …, последняя→выход. */
+    legs?: [number, number][][];
+    /** Длина пути по сетке, м. */
+    lengthM?: number;
+}
+
+export interface RaidPlan {
+    raids: Raid[];
+    budgetSec: number;
+    raidSec: number;
+}
+
+const pmcExtracts = (m: GameMap) => m.extracts.filter((e) => e.faction !== "scav");
+
+function nearest<T extends { position: Vec3 }>(list: T[], p: Vec3): T | undefined {
+    let best: T | undefined;
+    let d = Infinity;
+    for (const x of list) {
+        const dd = dist(x.position, p);
+        if (dd < d) {
+            d = dd;
+            best = x;
+        }
+    }
+    return best;
+}
+
+function districtName(map: GameMap, points: Vec3[]): string {
+    const labels = map.display.labels.filter((l) => l.size >= 60 || map.display.labels.length < 30);
+    if (!labels.length) return "";
+    const score = new Map<string, number>();
+    for (const p of points) {
+        let best: string | undefined;
+        let d = Infinity;
+        for (const l of labels) {
+            const dd = Math.hypot(l.x - p.x, l.z - p.z);
+            if (dd < d) {
+                d = dd;
+                best = l.text;
+            }
+        }
+        if (best) score.set(best, (score.get(best) ?? 0) + 1);
+    }
+    return [...score.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2)
+        .map(([t]) => labelRu(t))
+        .join(" · ");
+}
+
+export function planRaids(map: GameMap, stops: Stop[], settings: RaidSettings, extractOverride?: Record<number, string>): RaidPlan {
+    const raidSec = (map.raidDuration ?? 40) * 60;
+    const budgetSec = raidSec * settings.budgetShare;
+    const travel = (a: Vec3, b: Vec3) => (dist(a, b) * settings.detour) / settings.speed;
+    const extracts = pmcExtracts(map);
+    const spawns = map.spawns;
+
+    const approach = (p: Vec3) => {
+        const s = spawns.length ? nearest(spawns, p) : undefined;
+        return s ? travel(s.position, p) : settings.approachMin * 60;
+    };
+    const exitCost = (p: Vec3) => {
+        const e = nearest(extracts, p);
+        return (e ? travel(p, e.position) : 120) + 30;
+    };
+
+    if (!stops.length) return { raids: [], budgetSec, raidSec };
+
+    // 1. общий обход
+    const tour = planRoute(stops.map((s) => ({ stop: s, candidates: s.points.map((p) => p.position) }))).order;
+    const n = tour.length;
+    const work = tour.map((t) => objectiveSeconds(t.stop));
+
+    // стоимость куска [i, j]
+    const cost = (i: number, j: number) => {
+        let t = approach(tour[i].point) + exitCost(tour[j].point);
+        for (let k = i; k <= j; k++) {
+            t += work[k];
+            if (k > i) t += travel(tour[k - 1].point, tour[k].point);
+        }
+        return t;
+    };
+
+    // 2. DP: best[j] = [рейдов, время] для первых j точек
+    const best: { raids: number; time: number; from: number }[] = [{ raids: 0, time: 0, from: -1 }];
+    for (let j = 1; j <= n; j++) {
+        let cur = { raids: Infinity, time: Infinity, from: j - 1 };
+        for (let i = j - 1; i >= 0; i--) {
+            const c = cost(i, j - 1);
+            // одиночная точка допускается, даже если не влезает в бюджет
+            if (c > budgetSec && i < j - 1) break;
+            const cand = { raids: best[i].raids + 1, time: best[i].time + c, from: i };
+            if (cand.raids < cur.raids || (cand.raids === cur.raids && cand.time < cur.time)) cur = cand;
+        }
+        best.push(cur);
+    }
+    const cuts: [number, number][] = [];
+    for (let j = n; j > 0; j = best[j].from) cuts.unshift([best[j].from, j - 1]);
+
+    // 3. маршрут внутри каждого рейда
+    const raids: Raid[] = cuts.map(([i, j]) => {
+        const group = tour.slice(i, j + 1).map((t) => t.stop);
+        const center = tour[Math.floor((i + j) / 2)].point;
+        const firstGuess = tour[i].point;
+        const spawn = spawns.length ? nearest(spawns, firstGuess)?.position : undefined;
+        let extract = nearest(extracts, tour[j].point);
+        const route = planRoute(
+            group.map((s) => ({ stop: s, candidates: s.points.map((p) => p.position) })),
+            spawn,
+            extract?.position,
+        );
+        // выход — ближайший к последней точке уже оптимизированного маршрута
+        const last = route.order[route.order.length - 1]?.point ?? center;
+        extract = nearest(extracts, last);
+        return { group, route, spawn, extract };
+    }).map(({ route, spawn, extract }, index) => {
+        let t = spawn ? 0 : settings.approachMin * 60;
+        let travelSec = spawn ? 0 : t;
+        let taskSec = 0;
+        let prev = spawn;
+        const steps: RaidStep[] = route.order.map((o) => {
+            if (prev) {
+                const tr = travel(prev, o.point);
+                t += tr;
+                travelSec += tr;
+            }
+            const eta = t;
+            const w = objectiveSeconds(o.stop);
+            t += w;
+            taskSec += w;
+            prev = o.point;
+            return { stop: o.stop, point: o.point, eta };
+        });
+        if (prev && extract) {
+            const tr = travel(prev, extract.position) + 30;
+            t += tr;
+            travelSec += tr;
+        }
+        return {
+            index,
+            color: RAID_COLORS[index % RAID_COLORS.length],
+            name: districtName(map, steps.map((s) => s.point)) || `Рейд ${index + 1}`,
+            steps,
+            spawn,
+            extract,
+            travelSec,
+            taskSec,
+            totalSec: t,
+            shared: steps.filter((s) => s.stop.players.length > 1).length,
+        };
+    });
+
+    // 4. порядок рейдов: сначала где больше общих целей, затем где больше целей в минуту
+    raids.sort((a, b) => b.shared - a.shared || b.steps.length / b.totalSec - a.steps.length / a.totalSec);
+    raids.forEach((r, i) => {
+        r.index = i;
+        r.color = RAID_COLORS[i % RAID_COLORS.length];
+        // ручной выбор выхода (по номеру рейда в итоговом порядке)
+        const name = extractOverride?.[i];
+        const e = name ? map.extracts.find((x) => x.name === name) ?? map.transits.find((x) => x.name === name) : undefined;
+        if (e) {
+            const last = r.steps[r.steps.length - 1]?.point;
+            if (last && r.extract) r.totalSec += travel(last, e.position) - travel(last, r.extract.position);
+            r.extract = e;
+        }
+    });
+    return { raids, budgetSec, raidSec };
+}
+
+export const fmtMin = (sec: number) => `${Math.max(1, Math.round(sec / 60))} мин`;

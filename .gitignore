@@ -1,0 +1,9 @@
+node_modules/
+dist/
+# данные и карты скачиваются командой npm run sync
+public/data/
+public/maps/svg/
+# локальные файлы
+*.log
+.DS_Store
+Thumbs.db
