@@ -21,10 +21,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { initPriceCheck } from "./pricecheck.mjs";
 import { styleMaps } from "./stylemaps.mjs";
 import { initUpdater } from "./updater.mjs";
+import { CSP, hardenApp, openExternalSafe, originOf } from "./security.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, "..");
-const DEV_URL = process.env.SHERPA_DEV_URL; // npm run desktop:dev
+// dev-сервер — только при разработке: в собранном приложении переменная окружения не должна
+// подменять интерфейс чужой страницей с доступом к мосту приложения
+const DEV_URL = app.isPackaged ? undefined : process.env.SHERPA_DEV_URL; // npm run desktop:dev
+const TEST = !app.isPackaged && !!process.env.SHERPA_TEST;
+/** Откуда может быть интерфейс приложения. */
+const TRUSTED_ORIGINS = [DEV_URL ? originOf(DEV_URL) : "app://app"];
 const DIST = path.join(ROOT, "dist");
 const PUBLIC = path.join(ROOT, "public");
 // отдельный профиль (для автотестов и второй копии приложения)
@@ -94,6 +100,7 @@ function inside(base, rel) {
 function registerAppProtocol() {
     protocol.handle("app", async (req) => {
         const url = new URL(req.url);
+        if (url.host !== "app") return new Response("not found", { status: 404 });
         let rel = decodeURIComponent(url.pathname).replace(/^\/+/, "") || "index.html";
         // данные и карты: сначала свежая копия пользователя, затем то, что пришло с приложением
         const bases = rel.startsWith("data/") || rel.startsWith("maps/") ? [USER_DATA, DIST, PUBLIC] : [DIST];
@@ -102,9 +109,12 @@ function registerAppProtocol() {
             if (!file) continue;
             try {
                 const buf = await fsp.readFile(file);
-                return new Response(buf, {
-                    headers: { "content-type": MIME[path.extname(file).toLowerCase()] ?? "application/octet-stream", "access-control-allow-origin": "*", "cache-control": "no-cache" },
-                });
+                const ext = path.extname(file).toLowerCase();
+                const headers = { "content-type": MIME[ext] ?? "application/octet-stream", "cache-control": "no-cache", "x-content-type-options": "nosniff" };
+                if (ext === ".html") headers["content-security-policy"] = CSP;
+                // данные читают и страницы dev-сервера (другой источник) — CORS только для них
+                if (DEV_URL) headers["access-control-allow-origin"] = originOf(DEV_URL);
+                return new Response(buf, { headers });
             } catch {
                 /* следующий вариант */
             }
@@ -156,11 +166,29 @@ async function detectLogs() {
     }
     // частые места установки
     for (const d of ["C", "D", "E", "F"]) installs.add(`${d}:\\Battlestate Games\\Escape from Tarkov`), installs.add(`${d}:\\Battlestate Games\\EFT`);
-    for (const inst of installs) for (const sub of ["Logs", path.join("build", "Logs")]) {
-        const p = path.join(inst, sub);
-        if (exists(p)) return p;
-    }
-    return null;
+    // в версии 1.0 игра пишет в build\Logs, а в корне может остаться старая папка Logs —
+    // берём ту, где самая свежая сессия игры
+    let best = null;
+    let bestTime = -1;
+    for (const inst of installs)
+        for (const sub of [path.join("build", "Logs"), "Logs"]) {
+            const p = path.join(inst, sub);
+            if (!exists(p)) continue;
+            let newest = 0;
+            try {
+                for (const d of fs.readdirSync(p, { withFileTypes: true })) {
+                    if (!d.isDirectory() || !d.name.startsWith("log_")) continue;
+                    newest = Math.max(newest, fs.statSync(path.join(p, d.name)).mtimeMs);
+                }
+            } catch {
+                /* нет доступа */
+            }
+            if (newest > bestTime) {
+                best = p;
+                bestTime = newest;
+            }
+        }
+    return best;
 }
 
 function detectScreenshots() {
@@ -201,12 +229,28 @@ const allowedRoots = new Set();
 async function refreshRoots() {
     const p = await resolvePaths();
     allowedRoots.clear();
-    for (const r of [p.screenshots, p.logs]) if (r) allowedRoots.add(path.resolve(r));
+    for (const r of [p.screenshots, p.logs]) if (r) allowedRoots.add(realOrResolved(r));
     return p;
 }
+function realOrResolved(p) {
+    try {
+        return fs.realpathSync.native(p);
+    } catch {
+        return path.resolve(p);
+    }
+}
+function within(abs, roots) {
+    const a = abs.toLowerCase();
+    for (const r of roots) {
+        const rr = r.toLowerCase();
+        if (a === rr || a.startsWith(rr + path.sep)) return true;
+    }
+    return false;
+}
 function checkAllowed(p) {
-    const abs = path.resolve(p);
-    for (const r of allowedRoots) if (abs === r || abs.startsWith(r + path.sep)) return abs;
+    if (typeof p !== "string" || !p || p.length > 1024) throw new Error("Неверный путь");
+    const abs = realOrResolved(p);
+    if (within(abs, allowedRoots)) return abs;
     throw new Error("Доступ только к папкам скриншотов и логов игры");
 }
 
@@ -262,11 +306,6 @@ function createMain() {
         mainWin = null;
         overlayWin?.close();
         app.quit();
-    });
-    // внешние ссылки — в обычном браузере
-    mainWin.webContents.setWindowOpenHandler(({ url }) => {
-        if (/^https?:/.test(url)) shell.openExternal(url);
-        return { action: "deny" };
     });
 }
 
@@ -400,22 +439,50 @@ function broadcast(channel, data) {
 
 // ---------------- IPC ----------------
 
+/**
+ * Запрос принимается, только если он пришёл из верхнего фрейма окна Sherpa с интерфейсом приложения
+ * и это окно имеет право на этот канал: главное окно, виджет или карточка цены.
+ */
+function senderOk(e, roles) {
+    const frame = e.senderFrame;
+    if (!frame || frame !== e.sender.mainFrame) return false;
+    if (!TRUSTED_ORIGINS.includes(originOf(frame.url))) return false;
+    const w = BrowserWindow.fromWebContents(e.sender);
+    const role = w && w === mainWin ? "main" : w && w === overlayWin ? "overlay" : w && w === price?.window() ? "price" : null;
+    return !!role && roles.includes(role);
+}
+const MAIN = ["main"];
+const UI = ["main", "overlay"];
+function handle(channel, roles, fn) {
+    ipcMain.handle(channel, (e, ...args) => {
+        if (!senderOk(e, roles)) throw new Error("Запрос отклонён");
+        return fn(e, ...args);
+    });
+}
+function on(channel, roles, fn) {
+    ipcMain.on(channel, (e, ...args) => {
+        if (senderOk(e, roles)) fn(e, ...args);
+    });
+}
+const bool = (v) => v === true;
+const kindOf = (k) => (k === "logs" ? "logs" : "screenshots");
+
 function registerIpc() {
     // окно
-    ipcMain.handle("win:minimize", (e) => BrowserWindow.fromWebContents(e.sender)?.minimize());
-    ipcMain.handle("win:toggleMaximize", (e) => {
+    handle("win:minimize", UI, (e) => BrowserWindow.fromWebContents(e.sender)?.minimize());
+    handle("win:toggleMaximize", UI, (e) => {
         const w = BrowserWindow.fromWebContents(e.sender);
         if (!w) return;
         if (w.isMaximized()) w.unmaximize();
         else w.maximize();
     });
-    ipcMain.handle("win:close", (e) => BrowserWindow.fromWebContents(e.sender)?.close());
-    ipcMain.handle("win:isMaximized", (e) => !!BrowserWindow.fromWebContents(e.sender)?.isMaximized());
-    ipcMain.handle("app:info", () => ({ version: app.getVersion(), userData: USER, content: USER_DATA, dev: !!DEV_URL }));
+    handle("win:close", UI, (e) => BrowserWindow.fromWebContents(e.sender)?.close());
+    handle("win:isMaximized", UI, (e) => !!BrowserWindow.fromWebContents(e.sender)?.isMaximized());
+    handle("app:info", UI, () => ({ version: app.getVersion(), userData: USER, content: USER_DATA, dev: !!DEV_URL }));
     // прогресс игроков: копия в файле (основное хранилище интерфейса — localStorage в этой же папке)
     const PROGRESS = path.join(USER, "progress.json");
     const BACKUPS = path.join(USER, "backups");
-    ipcMain.handle("store:load", async () => {
+    handle("store:load", MAIN, async () => {
         for (const p of [PROGRESS, PROGRESS + ".tmp"]) {
             try {
                 return await fsp.readFile(p, "utf8");
@@ -425,7 +492,7 @@ function registerIpc() {
         }
         return null;
     });
-    ipcMain.handle("store:save", async (_e, json) => {
+    handle("store:save", MAIN, async (_e, json) => {
         if (typeof json !== "string" || json.length > 20_000_000) return;
         await fsp.mkdir(BACKUPS, { recursive: true });
         // запись через временный файл: прогресс не побьётся, если компьютер выключится посреди записи
@@ -437,50 +504,62 @@ function registerIpc() {
         const old = (await fsp.readdir(BACKUPS)).filter((n) => n.startsWith("progress-")).sort().slice(0, -7);
         for (const n of old) await fsp.rm(path.join(BACKUPS, n), { force: true });
     });
-    ipcMain.handle("app:prefs", () => settings.prefs);
-    ipcMain.handle("app:setPrefs", (_e, patch) => {
-        settings.prefs = { ...settings.prefs, ...patch };
+    handle("app:prefs", MAIN, () => settings.prefs);
+    handle("app:setPrefs", MAIN, (_e, patch) => {
+        if (typeof patch?.closeToTray === "boolean") settings.prefs = { ...settings.prefs, closeToTray: patch.closeToTray };
         saveSettings();
         return settings.prefs;
     });
-    ipcMain.handle("shell:open", (_e, url) => (/^https?:/.test(url) ? shell.openExternal(url) : null));
-    ipcMain.handle("shell:showFolder", (_e, p) => (p && exists(p) ? shell.openPath(p) : null));
+    handle("shell:open", UI, (_e, url) => openExternalSafe(String(url)));
+    // открыть можно только папку приложения или папки игры — не файл (openPath запустил бы программу)
+    handle("shell:showFolder", MAIN, async (_e, p) => {
+        if (typeof p !== "string" || !p) return null;
+        const abs = realOrResolved(p);
+        if (!within(abs, [realOrResolved(USER), ...allowedRoots])) return null;
+        const st = await fsp.stat(abs).catch(() => null);
+        return st?.isDirectory() ? shell.openPath(abs) : null;
+    });
 
     // папки игры
-    ipcMain.handle("paths:get", () => refreshRoots());
-    ipcMain.handle("paths:pick", async (e, kind) => {
+    handle("paths:get", MAIN, () => refreshRoots());
+    handle("paths:pick", MAIN, async (e, kind) => {
         const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender), {
-            title: kind === "logs" ? "Папка Logs игры" : "Папка скриншотов игры",
+            title: kindOf(kind) === "logs" ? "Папка Logs игры" : "Папка скриншотов игры",
             properties: ["openDirectory"],
         });
         if (r.canceled || !r.filePaths[0]) return refreshRoots();
-        settings.paths[kind === "logs" ? "logs" : "screenshots"] = r.filePaths[0];
+        settings.paths[kindOf(kind)] = r.filePaths[0];
         saveSettings();
         return refreshRoots();
     });
-    ipcMain.handle("paths:reset", (_e, kind) => {
-        settings.paths[kind === "logs" ? "logs" : "screenshots"] = null;
+    handle("paths:reset", MAIN, (_e, kind) => {
+        settings.paths[kindOf(kind)] = null;
         saveSettings();
         return refreshRoots();
     });
-    ipcMain.handle("game:screenshotKey", () => detectScreenshotKey());
+    handle("game:screenshotKey", MAIN, () => detectScreenshotKey());
 
     // чтение файлов в папках игры
-    ipcMain.handle("fs:list", async (_e, dir) => {
+    handle("fs:list", MAIN, async (_e, dir) => {
         const abs = checkAllowed(dir);
         const ents = await fsp.readdir(abs, { withFileTypes: true });
         return ents.map((d) => ({ name: d.name, kind: d.isDirectory() ? "directory" : "file" }));
     });
-    ipcMain.handle("fs:stat", async (_e, file) => {
+    handle("fs:stat", MAIN, async (_e, file) => {
         const st = await fsp.stat(checkAllowed(file));
         return { size: st.size, mtimeMs: st.mtimeMs };
     });
-    ipcMain.handle("fs:readText", async (_e, file, start, end) => {
+    handle("fs:readText", MAIN, async (_e, file, start, end) => {
         const abs = checkAllowed(file);
-        if (start == null) return fsp.readFile(abs, "utf8");
+        const MAX = 64 * 1024 * 1024;
+        if (start == null) {
+            if ((await fsp.stat(abs)).size > MAX) throw new Error("Файл слишком большой");
+            return fsp.readFile(abs, "utf8");
+        }
+        if (!Number.isSafeInteger(start) || start < 0 || (end != null && (!Number.isSafeInteger(end) || end < start))) throw new Error("Неверный диапазон");
         const fh = await fsp.open(abs, "r");
         try {
-            const len = Math.max(0, (end ?? (await fh.stat()).size) - start);
+            const len = Math.min(MAX, Math.max(0, (end ?? (await fh.stat()).size) - start));
             const buf = Buffer.alloc(len);
             await fh.read(buf, 0, len, start);
             return buf.toString("utf8");
@@ -488,29 +567,33 @@ function registerIpc() {
             await fh.close();
         }
     });
-    ipcMain.handle("fs:readBytes", async (_e, file) => {
-        const buf = await fsp.readFile(checkAllowed(file));
+    handle("fs:readBytes", MAIN, async (_e, file) => {
+        const abs = checkAllowed(file);
+        if ((await fsp.stat(abs)).size > 64 * 1024 * 1024) throw new Error("Файл слишком большой");
+        const buf = await fsp.readFile(abs);
         return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
     });
 
     // виджет
-    ipcMain.handle("overlay:open", () => {
+    handle("overlay:open", UI, () => {
         createOverlay();
         sendOverlayState();
     });
-    ipcMain.handle("overlay:close", () => overlayWin?.close());
-    ipcMain.handle("overlay:set", (_e, patch) => {
-        settings.overlay = { ...settings.overlay, ...patch };
+    handle("overlay:close", UI, () => overlayWin?.close());
+    handle("overlay:set", UI, (_e, patch) => {
+        // только эти два поля и только допустимые значения
+        if (typeof patch?.opacity === "number" && Number.isFinite(patch.opacity)) settings.overlay.opacity = Math.min(1, Math.max(0.1, patch.opacity));
+        if (typeof patch?.clickThrough === "boolean") settings.overlay.clickThrough = patch.clickThrough;
         saveSettings();
         applyClickThrough();
         sendOverlayState();
     });
-    ipcMain.handle("overlay:getState", () => ({ opacity: settings.overlay.opacity, clickThrough: !!settings.overlay.clickThrough, open: !!overlayWin }));
-    ipcMain.on("overlay:model", (_e, model) => {
+    handle("overlay:getState", UI, () => ({ opacity: settings.overlay.opacity, clickThrough: !!settings.overlay.clickThrough, open: !!overlayWin }));
+    on("overlay:model", MAIN, (_e, model) => {
         lastModel = model;
         overlayWin?.webContents.send("overlay:model", model);
     });
-    ipcMain.on("overlay:action", (_e, action) => {
+    on("overlay:action", ["overlay"], (_e, action) => {
         if (action?.type === "openMain") {
             if (mainWin?.isMinimized()) mainWin.restore();
             mainWin?.show();
@@ -520,13 +603,21 @@ function registerIpc() {
         mainWin?.webContents.send("overlay:action", action);
     });
     // пока включён «сквозной» режим, наведение на ручку виджета временно возвращает клики
-    ipcMain.on("overlay:hoverHandle", (_e, on) => {
+    on("overlay:hoverHandle", ["overlay"], (_e, over) => {
         if (!overlayWin || !settings.overlay.clickThrough) return;
-        overlayWin.setIgnoreMouseEvents(!on, { forward: true });
+        overlayWin.setIgnoreMouseEvents(!bool(over), { forward: true });
     });
 
     // данные tarkov.dev
-    ipcMain.handle("data:sync", async (e, modes) => {
+    let syncing = null;
+    handle("data:sync", MAIN, async (e, modes) => {
+        // одно обновление за раз; режимы — только известные
+        if (syncing) return syncing;
+        modes = Array.isArray(modes) ? modes.filter((m) => m === "regular" || m === "pve") : undefined;
+        syncing = runSync(e, modes).finally(() => (syncing = null));
+        return syncing;
+    });
+    async function runSync(e, modes) {
         const send = (m) => e.sender.send("data:progress", m);
         const { syncData } = await import(pathToFileURL(path.join(ROOT, "scripts", "sync-data.mjs")).href);
         await syncData({
@@ -544,8 +635,8 @@ function registerIpc() {
         settings.lastSync = Date.now();
         saveSettings();
         return settings.lastSync;
-    });
-    ipcMain.handle("data:info", () => ({ lastSync: settings.lastSync ?? null, hasUserData: exists(path.join(USER_DATA, "data", "regular.json")) }));
+    }
+    handle("data:info", MAIN, () => ({ lastSync: settings.lastSync ?? null, hasUserData: exists(path.join(USER_DATA, "data", "regular.json")) }));
 }
 
 // ---------------- горячие клавиши ----------------
@@ -569,14 +660,16 @@ const HOTKEYS = {
 // ---------------- запуск ----------------
 
 app.whenReady().then(async () => {
+    hardenApp({ trustedOrigins: TRUSTED_ORIGINS });
     registerAppProtocol();
     registerIpc();
     await refreshRoots();
     createMain();
     createTray();
-    price = initPriceCheck({ settings, saveSettings, preload, pageUrl, userDir: USER, mainWin: () => mainWin });
-    if (process.env.SHERPA_TEST) globalThis.__sherpa = { price, tray: () => tray };
+    price = initPriceCheck({ settings, saveSettings, preload, pageUrl, userDir: USER, mainWin: () => mainWin, handle, on });
+    if (TEST) globalThis.__sherpa = { price, tray: () => tray };
     updater = initUpdater({
+        handle,
         broadcast,
         beforeInstall: () => {
             quitting = true;

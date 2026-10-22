@@ -41,6 +41,12 @@ interface Props {
     onDataUpdated: () => void;
 }
 
+/** «log_2026.10.22_22-32-15_…» → «22.10.2026 22:32». */
+function sessionDate(folder: string) {
+    const m = /log_(\d{4})\.(\d{2})\.(\d{2})_(\d{2})-(\d{2})/.exec(folder);
+    return m ? `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}` : folder;
+}
+
 const STATUS = { off: "не найдено", "need-permission": "нужно разрешение", on: "подключено", error: "ошибка" };
 
 const HOTKEYS: [string, string][] = [
@@ -86,10 +92,24 @@ export default function NavigatorTab(p: Props) {
             </div>
             <p className="hint">Из логов — карта, начало и конец рейда, режим PvP/PvE и взятые/сданные квесты.</p>
             <Link desktopMode={!!desktop} label="Логи" link={p.logs} onConnect={p.connectLogs} onOff={() => p.disconnect("logs")} />
-            {p.log?.mapNameId && (
+            {p.logs.status === "on" && (
                 <div className="fix">
-                    Последний рейд: <b>{p.log.mapNameId}</b>
-                    {p.log.raidStart && ` · начало ${new Date(p.log.raidStart).toLocaleTimeString("ru-RU")}`}
+                    {p.log?.logFile ? (
+                        <>
+                            Сессия игры: <b>{sessionDate(p.log.logFile)}</b>
+                            {p.log.mapNameId ? (
+                                <>
+                                    {" "}
+                                    · последний рейд: <b>{p.log.mapNameId}</b>
+                                    {p.log.raidStart && ` · ${p.log.raidConfirmed === false ? "поиск матча" : "начало"} ${new Date(p.log.raidStart).toLocaleTimeString("ru-RU")}`}
+                                </>
+                            ) : (
+                                " · рейдов в ней пока нет"
+                            )}
+                        </>
+                    ) : (
+                        "В папке нет сессий игры — проверь, что выбрана папка Logs той игры, в которую играешь (в версии 1.0 это …\\build\\Logs)."
+                    )}
                 </div>
             )}
             {p.logs.status === "on" && (

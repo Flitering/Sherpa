@@ -1,0 +1,24 @@
+# Проверка каждого коммита: типы, сборка, уязвимости зависимостей, которые попадают в приложение.
+name: CI
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      # зависимости самого приложения — без уязвимостей уровня high и выше
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run build

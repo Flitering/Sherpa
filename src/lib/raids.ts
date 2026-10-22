@@ -59,6 +59,8 @@ export interface Raid {
     name: string;
     steps: RaidStep[];
     spawn?: Vec3;
+    /** Спавн известен по скриншоту (а не угадан как ближайший к первой точке). */
+    spawnKnown?: boolean;
     extract?: MapPoint;
     /** Оценка, с: дорога, задания, весь рейд. */
     travelSec: number;
@@ -353,6 +355,7 @@ export function planWithSpawn(
         name: `От спавна · ${districtName(map, steps.map((s) => s.point)) || "рядом"}`,
         steps,
         spawn,
+        spawnKnown: true,
         extract,
         travelSec,
         taskSec,

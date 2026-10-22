@@ -153,7 +153,9 @@ export default function App() {
     const stops = useMemo(() => (bundle && gameMap ? activeStops(bundle, state.players, mapKey, includeShoot) : []), [bundle, gameMap, state.players, mapKey, includeShoot]);
     // рейд по логам (нужен уже здесь: план зависит от точки спавна текущего рейда)
     const raidStartLog = logState?.raidStart;
-    const raidActive = !!raidStartLog && (!logState?.raidEnd || logState.raidEnd < raidStartLog) && Date.now() - raidStartLog < 75 * 60_000;
+    // поиск матча без загрузки карты (его могли отменить) считается рейдом 6 минут, загруженный рейд — 75
+    const raidActive =
+        !!raidStartLog && (!logState?.raidEnd || logState.raidEnd < raidStartLog) && Date.now() - raidStartLog < (logState?.raidConfirmed === false ? 6 : 75) * 60_000;
     const spawnHere = raidActive && raidSpawn && raidSpawn.raid === raidStartLog && raidSpawn.mapKey === mapKey ? raidSpawn : null;
     const rawPlan: RaidPlan = useMemo(
         () =>
@@ -522,7 +524,7 @@ export default function App() {
         setPip(w);
     };
 
-    const doFocus = useCallback((position: Vec3) => setFocus({ position, seq: Date.now() }), []);
+    const doFocus = useCallback((position: Vec3) => setFocus({ position, seq: Date.now(), mapKey: mapKeyRef.current }), []);
     const toggleObjectiveOne = useCallback((pid: string, oid: string) => setObjective([pid], oid, "toggle"), [setObjective]);
     const [detailSel, setDetailSel] = useState<{ raid: number; stopId: string }>();
     const sessionRef = useRef(session);
@@ -565,11 +567,15 @@ export default function App() {
 
     // Подробный путь к выбранной цели в режиме планирования (клик по точке).
     const [planDetail, setPlanDetail] = useState<{ stopId: string; route: DetailRoute | null; loading: boolean }>();
-    useEffect(() => setDetailSel(undefined), [mapKey]);
+    // смена карты сбрасывает выбор точки и приближение к ней
+    useEffect(() => {
+        setDetailSel(undefined);
+        setFocus(undefined);
+    }, [mapKey]);
     useEffect(() => {
         const raid = detailSel ? plan.raids[detailSel.raid] : undefined;
         const i = raid ? raid.steps.findIndex((st) => st.stop.id === detailSel!.stopId) : -1;
-        if (!raid || i < 0 || !gameMap?.display.svgPath || !svc) {
+        if (!raid || i < 0 || !gameMap?.display.svgPath) {
             setPlanDetail(undefined);
             return;
         }
@@ -697,7 +703,7 @@ export default function App() {
                 if (!st) continue;
                 onSelectStop(st.stop.id, r.index);
                 setTab("quests"); // остаёмся в квестах, карта покажет точку
-                setFocus({ position: st.point, seq: Date.now() });
+                setFocus({ position: st.point, seq: Date.now(), mapKey: mapKeyRef.current });
                 return;
             }
         },

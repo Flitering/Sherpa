@@ -4,6 +4,7 @@ dist/
 public/data/
 public/maps/svg/
 public/maps/styled/
+public/ocr/
 # локальные файлы
 *.log
 .DS_Store

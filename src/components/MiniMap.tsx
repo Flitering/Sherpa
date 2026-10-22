@@ -259,10 +259,52 @@ export default function MiniMap({ display, mapKey, color, fix, points, guide, ex
         ctx.beginPath();
         ctx.arc(size.w / 2, size.h / 2, R - 1, 0, Math.PI * 2);
         ctx.stroke();
-        ctx.fillStyle = "rgba(217,212,191,0.7)";
+
+        // указатель «куда идти» на краю круга: по пути (точка примерно в полрадиуса впереди), без пути — на цель
+        const target = points.find((p) => p.target);
+        let aim: { x: number; z: number } | undefined;
+        if (fix && guide && guide.length > 1) {
+            const ahead = Math.min(radius * 0.5, 40);
+            const far = guide.find(([x, z]) => Math.hypot(x - fix.x, z - fix.z) >= ahead);
+            const [x, z] = far ?? guide[guide.length - 1];
+            aim = { x, z };
+        } else if (fix && target) aim = target;
+        if (aim) {
+            const [ax, ay] = base.toPx(aim);
+            // те же преобразования, что у карты: сдвиг к игроку, поворот «вперёд — вверх»
+            const vx = (ax - cx) * scale, vy = (ay - cy) * scale;
+            const dx = vx * Math.cos(rot) - vy * Math.sin(rot);
+            const dy = vx * Math.sin(rot) + vy * Math.cos(rot);
+            if (Math.hypot(dx, dy) > 2) {
+                const a = Math.atan2(dy, dx);
+                ctx.save();
+                ctx.translate(size.w / 2 + Math.cos(a) * (R - 11), size.h / 2 + Math.sin(a) * (R - 11));
+                ctx.rotate(a + Math.PI / 2);
+                ctx.fillStyle = color;
+                ctx.strokeStyle = "#000";
+                ctx.lineWidth = 2;
+                ctx.shadowColor = color;
+                ctx.shadowBlur = 8;
+                ctx.beginPath();
+                ctx.moveTo(0, -11);
+                ctx.lineTo(10, 7);
+                ctx.lineTo(0, 3);
+                ctx.lineTo(-10, 7);
+                ctx.closePath();
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.stroke();
+                ctx.strokeStyle = "rgba(255,255,255,0.8)";
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+        // масштаб — в углу, чтобы не спорить с указателем на краю круга
+        ctx.fillStyle = "rgba(217,212,191,0.75)";
         ctx.font = "600 10px 'Roboto Condensed', sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(`${radius} м`, size.w / 2, size.h / 2 + R - 8);
+        ctx.textAlign = "left";
+        ctx.fillText(`${radius} м`, size.w / 2 - R + 2, size.h / 2 + R - 2);
     }, [base, size, fix, points, guide, extract, radius, color, mapAlpha]);
 
     return <canvas ref={ref} className="minimap" style={{ width: "100%", height: "100%", display: "block" }} />;

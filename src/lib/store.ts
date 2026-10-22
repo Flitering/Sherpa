@@ -27,6 +27,9 @@ export interface AppState {
 }
 
 const KEY = "sherpa:v1";
+
+/** Цвет игрока — только #rrggbb: он подставляется в разметку меток на карте. */
+export const safeColor = (c: unknown) => (typeof c === "string" && /^#[0-9a-f]{6}$/i.test(c) ? c : "#9a9a9a");
 export const PLAYER_COLORS = ["#4ccdea", "#f5af5a", "#aadd89", "#cba8ff", "#ff8a8a"];
 
 export const newPlayer = (name: string, index: number): Player => ({
@@ -47,7 +50,8 @@ function parse(raw: string | null): AppState | null {
     if (!raw) return null;
     try {
         const s = JSON.parse(raw) as AppState;
-        if (s.version !== 1 || !s.players?.length) return null;
+        if (s.version !== 1 || !Array.isArray(s.players) || !s.players.length) return null;
+        sanitizePlayers(s);
         // старые имена по умолчанию → «Игрок N»
         s.players = s.players.map((p, i) => (p.name === "Я" || p.name === "Друг" ? { ...p, name: `Игрок ${i + 1}` } : p));
         return s;
@@ -105,9 +109,26 @@ export function exportState(state: AppState) {
 }
 
 export async function importState(file: File): Promise<AppState> {
+    if (file.size > 20_000_000) throw new Error("Слишком большой файл");
     const s = JSON.parse(await file.text()) as AppState;
-    if (s.version !== 1 || !Array.isArray(s.players)) throw new Error("Это не файл прогресса Sherpa");
+    if (s.version !== 1 || !Array.isArray(s.players) || !s.players.length) throw new Error("Это не файл прогресса Sherpa");
+    // файл мог прийти от другого человека — приводим к ожидаемому виду
+    sanitizePlayers(s);
     return s;
+}
+
+function sanitizePlayers(s: AppState) {
+    s.players = s.players
+        .filter((p) => p && typeof p === "object" && typeof p.id === "string")
+        .map((p, i) => ({
+            id: p.id.slice(0, 40),
+            name: String(p.name ?? `Игрок ${i + 1}`).slice(0, 40),
+            color: safeColor(p.color),
+            level: Math.min(79, Math.max(1, Number(p.level) || 1)),
+            tasks: p.tasks && typeof p.tasks === "object" ? p.tasks : {},
+            objectivesDone: p.objectivesDone && typeof p.objectivesDone === "object" ? p.objectivesDone : {},
+        }));
+    if (!s.players.some((p) => p.id === s.activePlayer)) s.activePlayer = s.players[0]?.id;
 }
 
 /** Удалить игрока; если это был «я» — «я» становится первый из оставшихся. */

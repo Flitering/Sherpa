@@ -23,6 +23,8 @@ export interface PriceScan {
     manual: boolean;
     debug: boolean;
     display: { id: number; bounds: { x: number; y: number; width: number; height: number }; scaleFactor: number };
+    /** Только автотесты (несобранная версия): кадр из картинки вместо захвата экрана. */
+    testImage?: string;
 }
 export interface PriceResult {
     found: boolean;

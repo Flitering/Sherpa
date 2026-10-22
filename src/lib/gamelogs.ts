@@ -1,7 +1,8 @@
 // Логи игры: текущая карта, начало рейда, режим (PvP/PvE) и события квестов.
 //
 // Папка «…\Escape from Tarkov\Logs» содержит папки сессий log_<дата>. В каждой:
-//  - application*.log — «TRACE-NetworkGameCreate … Location: TarkovStreets», «Session mode: pve»;
+//  - application*.log — «Matching with group id» и следом «scene preset path:maps/city_preset.bundle» (начало
+//    поиска матча, карта), позже «TRACE-NetworkGameCreate … Location: TarkovStreets» (карта загружена), «Session mode: pve»;
 //  - notifications*.log — «Got notification | ChatMessageReceived» и JSON с message.type:
 //    10 — квест взят, 11 — провален, 12 — выполнен; message.templateId начинается с id квеста.
 // Тот же принцип использует TarkovMonitor. Файлы только читаются.
@@ -20,8 +21,10 @@ export interface TaskEvent {
 export interface LogState {
     /** nameId карты из последней строки создания рейда, например «TarkovStreets». */
     mapNameId?: string;
-    /** Время начала рейда по логу (мс). */
+    /** Время начала рейда по логу (мс): начало поиска матча. */
     raidStart?: number;
+    /** Карта загрузилась (строка создания рейда). До этого — только поиск матча, его могут отменить. */
+    raidConfirmed?: boolean;
     /** Время последнего выхода из рейда (UserMatchOver), мс. */
     raidEnd?: number;
     /** Короткий id рейда из строки создания рейда. */
@@ -38,6 +41,59 @@ const PREFIX = String.raw`^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\.\d+(?: [+-]\
 const LOCATION_RE = new RegExp(PREFIX + String.raw`.*TRACE-NetworkGameCreate.*?Location: ([^,\s]+)`, "gm");
 const MODE_RE = new RegExp(PREFIX + String.raw`.*Session mode: ([A-Za-z]+)`, "gm");
 const LINE_TIME_RE = new RegExp(PREFIX);
+const MATCHING_RE = new RegExp(PREFIX + String.raw`.*Matching with group id`, "gm");
+const PRESET_RE = new RegExp(PREFIX + String.raw`.*scene preset path:maps/([a-z_]+?)(?:_preset)?\.bundle`, "gm");
+
+/** Набор сцены → nameId карты (как в данных tarkov.dev). */
+const PRESET_MAP: Record<string, string> = {
+    city: "TarkovStreets",
+    customs: "bigmap",
+    factory_day: "factory4_day",
+    factory_night: "factory4_night",
+    laboratory: "laboratory",
+    lighthouse: "Lighthouse",
+    rezerv_base: "RezervBase",
+    sandbox: "Sandbox",
+    sandbox_high: "Sandbox_high",
+    shopping_mall: "Interchange",
+    shoreline: "Shoreline",
+    woods: "Woods",
+    labyrinth: "Labyrinth",
+    terminal: "Terminal",
+    icebreaker: "Icebreaker",
+};
+
+function allMatches(re: RegExp, text: string) {
+    const out: RegExpExecArray[] = [];
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) out.push(m);
+    return out;
+}
+
+/**
+ * Последний рейд: начало поиска матча (карта — из набора сцены, загруженного сразу после него) и/или
+ * строка создания рейда (карта загружена). Поиск матча без загрузки карты — ещё не подтверждённый рейд.
+ */
+export function parseRaid(appText: string): Pick<LogState, "mapNameId" | "raidStart" | "raidConfirmed" | "raidId"> {
+    const created = allMatches(LOCATION_RE, appText).pop();
+    const tCreated = created ? toTime(created[1], created[2]) : undefined;
+    const matching = allMatches(MATCHING_RE, appText).pop();
+    const tMatch = matching ? toTime(matching[1], matching[2]) : undefined;
+    let presetMap: string | undefined;
+    if (matching && tMatch) {
+        // набор сцены, загруженный в течение минуты после начала поиска, — карта этого рейда
+        const after = allMatches(PRESET_RE, appText).find((p) => p.index > matching.index && toTime(p[1], p[2]) - tMatch < 60_000);
+        if (after) presetMap = PRESET_MAP[after[3]];
+    }
+    if (tCreated && (!tMatch || tCreated >= tMatch)) {
+        // рейд загружен; если поиск начался незадолго до этого — это тот же рейд, время начала — поиск
+        const start = tMatch && tCreated - tMatch < 8 * 60_000 ? tMatch : tCreated;
+        return { mapNameId: created![3], raidStart: start, raidConfirmed: true, raidId: /shortId: ([A-Z0-9]{4,})/.exec(created![0])?.[1] };
+    }
+    if (tMatch) return { mapNameId: presetMap ?? (created ? created[3] : undefined), raidStart: tMatch, raidConfirmed: false };
+    return {};
+}
 
 const toTime = (d: string, t: string) => new Date(`${d}T${t}`).getTime();
 
@@ -150,15 +206,9 @@ export function watchLogs(dir: FileSystemDirectoryHandle, onState: (s: LogState)
                     lastKey = key;
                     const appText = (await readFiles(sub, isApp)).map((a) => a.text.slice(-3_000_000)).join("\n");
                     const notif = await readFiles(sub, isNotif);
-                    let m: RegExpExecArray | null;
-                    let last: RegExpExecArray | null = null;
-                    LOCATION_RE.lastIndex = 0;
-                    while ((m = LOCATION_RE.exec(appText))) last = m;
                     const modes = parseModes(appText);
                     onState({
-                        mapNameId: last?.[3],
-                        raidStart: last ? toTime(last[1], last[2]) : undefined,
-                        raidId: last ? /shortId: ([A-Z0-9]{4,})/.exec(last[0])?.[1] : undefined,
+                        ...parseRaid(appText),
                         raidEnd: notif.map((n) => parseRaidEnd(n.text)).reduce<number | undefined>((a, b) => (b && (!a || b > a) ? b : a), undefined),
                         sessionMode: modes[modes.length - 1]?.[1],
                         taskEvents: notif.flatMap((n) => parseTaskEvents(n.text, modes)),

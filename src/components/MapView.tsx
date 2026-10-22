@@ -11,10 +11,13 @@ import { layerRu, type DetailRoute } from "../lib/navdetail";
 import { heatmapFor } from "../lib/heatmap";
 import { classifyHazards, type HazardClasses } from "../lib/hazards";
 import { loadStyled, styledBounds, styledUrl, type StyledEntry } from "../lib/styledMaps";
+import { safeColor } from "../lib/store";
 
 export interface MapFocus {
     position: Vec3;
     seq: number;
+    /** Карта, на которой выбрана точка: на другой карте фокус не применяется. */
+    mapKey: string;
 }
 
 interface Props {
@@ -194,7 +197,7 @@ function MapView(props: Props) {
             L.marker(toLatLng(l), {
                 icon: L.divIcon({
                     className: "map-label" + (l.size >= 60 ? " big" : ""),
-                    html: `<span style="transform: rotate(${l.rotation}deg)">${escapeHtml(labelRu(l.text))}</span>`,
+                    html: `<span style="transform: rotate(${Number(l.rotation) || 0}deg)">${escapeHtml(labelRu(l.text))}</span>`,
                     iconSize: [0, 0],
                 }),
                 interactive: false,
@@ -273,7 +276,7 @@ function MapView(props: Props) {
                 icon: L.divIcon({ className: "stationary " + s.type + lvl(s.position), html: s.type === "ags" ? "АГС" : "У", iconSize: [0, 0] }),
                 keyboard: false,
             })
-                .bindTooltip(s.type === "ags" ? "АГС-30 — станковый гранатомёт" : (s.name || "НСВ Утёс") + " — крупнокалиберный пулемёт", { direction: "top" })
+                .bindTooltip(s.type === "ags" ? "АГС-30 — станковый гранатомёт" : escapeHtml(s.name || "НСВ Утёс") + " — крупнокалиберный пулемёт", { direction: "top" })
                 .addTo(g);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -301,7 +304,7 @@ function MapView(props: Props) {
                 keyboard: false,
                 zIndexOffset: chosen ? 900 : 0,
             })
-                .bindTooltip(`Выход: ${e.name}${e.faction === "shared" ? " (общий)" : ""}${cond}${off ? " — недоступен в этом рейде" : ""}`, { direction: "top" })
+                .bindTooltip(`Выход: ${escapeHtml(e.name)}${e.faction === "shared" ? " (общий)" : ""}${cond}${off ? " — недоступен в этом рейде" : ""}`, { direction: "top" })
                 .addTo(g);
         }
         for (const t of gameMap.transits) {
@@ -309,7 +312,7 @@ function MapView(props: Props) {
                 icon: L.divIcon({ className: "transit" + lvl(t.position), html: "⇄", iconSize: [18, 18] }),
                 keyboard: false,
             })
-                .bindTooltip(t.name, { direction: "top" })
+                .bindTooltip(escapeHtml(t.name), { direction: "top" })
                 .addTo(g);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -383,7 +386,7 @@ function MapView(props: Props) {
             }
             if (raid.spawn && !dim) {
                 L.marker(toLatLng(raid.spawn), { icon: L.divIcon({ className: "spawn-pin", html: "S", iconSize: [18, 18] }) })
-                    .bindTooltip("Вероятный спавн (ближайший к первой точке)")
+                    .bindTooltip(raid.spawnKnown ? "Точка спавна (по скриншоту)" : "Вероятный спавн (ближайший к первой точке)")
                     .addTo(g);
             }
             raid.steps.forEach((s, i) => {
@@ -393,7 +396,7 @@ function MapView(props: Props) {
                 const shared = s.stop.players.length > 1;
                 const cls = "stop" + dim + (done ? " done" : "") + (target ? " target" : "") + (shared ? " shared" : "") + lvl(s.point, pt?.top, pt?.bottom);
                 const label = `${ri + 1}.${i + 1}`; // всегда «рейд.точка» — так же, как в карточках квестов
-                const who = s.stop.players.map((p) => `<i style="background:${p.color}"></i>`).join("");
+                const who = s.stop.players.map((p) => `<i style="background:${safeColor(p.color)}"></i>`).join("");
                 const m = L.marker(toLatLng(s.point), {
                     icon: L.divIcon({ className: cls, html: `<span style="--rc:${color}">${done ? "✓" : label}</span><em>${who}</em>`, iconSize: [26, 26] }),
                     zIndexOffset: dim ? 0 : 1000,
@@ -458,7 +461,8 @@ function MapView(props: Props) {
         setLevel(idx);
         // приближаемся к участку у цели (подробная часть + последние метры подхода)
         const pts = [...r.approach.slice(-2), ...r.segments.flatMap((s) => s.points)];
-        if (pts.length && lmap.current && !props.follow) {
+        const inMap = toBounds(display.bounds).pad(0.2);
+        if (pts.length && lmap.current && !props.follow && pts.every(([x, z]) => inMap.contains(toLatLng({ x, z })))) {
             lmap.current.flyToBounds(L.latLngBounds(pts.map(([x, z]) => toLatLng({ x, z }))).pad(0.25), { maxZoom: display.maxZoom + 1, duration: 0.6 });
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -474,7 +478,7 @@ function MapView(props: Props) {
         for (const sg of r.segments) {
             const here = sg.svgLayer === currentSvgLayer;
             L.polyline(ll(sg.points), { className: "detail-line" + (here ? "" : " other"), interactive: false })
-                .bindTooltip(layerRu(sg.layerName), { sticky: true })
+                .bindTooltip(escapeHtml(layerRu(sg.layerName)), { sticky: true })
                 .addTo(g);
         }
         for (const e of r.events) {
@@ -484,15 +488,22 @@ function MapView(props: Props) {
                 icon: L.divIcon({ className: "detail-ev" + (isStair ? " stair" : " door"), html, iconSize: [0, 0] }),
                 zIndexOffset: 1500,
             })
-                .bindTooltip(isStair ? `Лестница: ${layerRu(e.layerName)} → ${layerRu(e.toLayerName ?? "")}` : html === "ВХОД" ? "Вход в здание" : "Выход на улицу")
+                .bindTooltip(isStair ? `Лестница: ${escapeHtml(layerRu(e.layerName))} → ${escapeHtml(layerRu(e.toLayerName ?? ""))}` : html === "ВХОД" ? "Вход в здание" : "Выход на улицу")
                 .addTo(g);
         }
     }, [props.detail, currentSvgLayer, gameMap.key, useTile]);
 
     // ---- фокус ----
+    // только по новому выбору (seq) и только на своей карте: раньше смена карты (и её зума)
+    // повторно запускала перелёт к точке прошлой карты — на новой там пусто
+    const focusSeq = useRef(0);
     useEffect(() => {
-        if (props.focus && lmap.current) lmap.current.flyTo(toLatLng(props.focus.position), Math.max(lmap.current.getZoom(), display.maxZoom - 1), { duration: 0.6 });
-    }, [props.focus, display.maxZoom]);
+        const f = props.focus;
+        if (!f || !lmap.current || f.seq === focusSeq.current || f.mapKey !== gameMap.key) return;
+        focusSeq.current = f.seq;
+        lmap.current.flyTo(toLatLng(f.position), Math.max(lmap.current.getZoom(), display.maxZoom - 1), { duration: 0.6 });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [props.focus, gameMap.key]);
 
     return (
         <div className="map-wrap">

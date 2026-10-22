@@ -65,7 +65,7 @@ export function AppPanel() {
                 </button>
                 <span className="hint">
                     {UPDATE_TEXT[s.status]}
-                    {s.status === "error" && s.error ? `: ${s.error}` : ""}
+                    {s.error ? ` (${s.error})` : ""}
                 </span>
             </div>
             <p className="hint">Скачиваются только изменившиеся части, приложение ставится в ту же папку, настройки и прогресс сохраняются.</p>

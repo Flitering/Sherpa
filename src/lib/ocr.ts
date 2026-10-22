@@ -2,6 +2,16 @@
 // языковых данных). Используется для списка заданий и (бета) для инвентаря.
 
 import type { Bundle, Item } from "../types";
+import { dataUrl } from "./desktop";
+
+/**
+ * Распознаватель целиком из файлов приложения (scripts/copy-ocr.mjs): никакого кода и словарей с CDN во время работы.
+ * Адреса абсолютные — воркер подгружает ядро относительно себя.
+ */
+export function ocrOptions() {
+    const abs = (p: string) => new URL(dataUrl(p), location.href).href;
+    return { workerPath: abs("ocr/worker.min.js"), corePath: abs("ocr/"), langPath: abs("ocr/lang"), workerBlobURL: false, gzip: true, cacheMethod: "none" };
+}
 
 type TWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;
 let workerPromise: Promise<TWorker> | null = null;
@@ -11,6 +21,7 @@ async function getWorker(onProgress?: (p: string) => void): Promise<TWorker> {
         workerPromise = (async () => {
             const { createWorker } = await import("tesseract.js");
             return createWorker(["rus", "eng"], 1, {
+                ...ocrOptions(),
                 logger: (m: { status: string; progress: number }) => onProgress?.(`${statusRu(m.status)} ${Math.round(m.progress * 100)}%`),
             });
         })();

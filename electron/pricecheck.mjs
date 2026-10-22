@@ -7,16 +7,16 @@
 //  - игра ничего об этом не знает: ни память, ни процесс, ни ввод не затрагиваются.
 // Сканирование включается, только пока запущена игра (по списку процессов Windows), если не выбрано иное.
 
-import { app, BrowserWindow, desktopCapturer, ipcMain, screen, session, shell } from "electron";
+import { app, BrowserWindow, desktopCapturer, screen, session, shell } from "electron";
 import { execFile } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
 const DWELL_MS = 280; // сколько курсор должен постоять
-const RETRY_MS = 420; // подсказка игры появляется не сразу — пробуем ещё
-const MAX_TRIES = 3;
+const RETRY_MS = 350; // подсказка игры появляется не сразу — пробуем ещё
+const MAX_TRIES = 6; // ~2 секунды: без подсказки попытка дешёвая, распознавание не запускается
 // увёл курсор — карточка исчезает (в автотестах настоящий курсор где угодно — не прячем)
-const HIDE_DIST = process.env.SHERPA_TEST ? Infinity : 36;
+const HIDE_DIST = !app.isPackaged && process.env.SHERPA_TEST ? Infinity : 36;
 
 /**
  * @param {{ settings: any, saveSettings: () => void, preload: string, pageUrl: (p: string) => string, userDir: string, mainWin: () => BrowserWindow | null }} ctx
@@ -150,8 +150,23 @@ export function initPriceCheck(ctx) {
         request(p, false);
     }
 
-    ipcMain.on("price:result", (_e, res) => {
-        if (!scan) return;
+    ctx.on("price:result", ["price"], (_e, res) => {
+        if (!scan || typeof res !== "object" || !res) return;
+        // размеры и координаты — только разумные числа (окно всегда поверх всего)
+        const num = (v, lo, hi) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : lo);
+        res = {
+            found: res.found === true,
+            width: num(res.width, 0, 520),
+            height: num(res.height, 0, 420),
+            tip: res.tip && typeof res.tip === "object" ? { x: num(res.tip.x, -1e5, 1e5), y: num(res.tip.y, -1e5, 1e5), w: num(res.tip.w, 0, 4000), h: num(res.tip.h, 0, 4000) } : null,
+            name: typeof res.name === "string" ? res.name.slice(0, 200) : undefined,
+            error: typeof res.error === "string" ? res.error.slice(0, 300) : undefined,
+        };
+        if (scan.test) {
+            // автотест по картинке: на экран ничего не выводим
+            scan.busy = false;
+            return;
+        }
         const at = { x: scan.x, y: scan.y };
         const manual = scan.manual;
         scan.busy = false;
@@ -166,7 +181,8 @@ export function initPriceCheck(ctx) {
         if (res.found || (manual && res.width)) show(res, at);
     });
 
-    ipcMain.on("price:debug", async (_e, d) => {
+    ctx.on("price:debug", ["price"], async (_e, d) => {
+        if (!st().debug || typeof d?.png !== "string" || d.png.length > 15_000_000) return;
         try {
             await fsp.mkdir(debugDir, { recursive: true });
             const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -236,14 +252,14 @@ export function initPriceCheck(ctx) {
         sendState();
     }
 
-    ipcMain.handle("price:get", () => state());
-    ipcMain.handle("price:set", (_e, patch) => {
-        Object.assign(st(), patch);
+    ctx.handle("price:get", ["main"], () => state());
+    ctx.handle("price:set", ["main"], (_e, patch) => {
+        for (const k of ["enabled", "auto", "onlyWithGame", "debug"]) if (typeof patch?.[k] === "boolean") st()[k] = patch[k];
         ctx.saveSettings();
         apply();
         return state();
     });
-    ipcMain.handle("price:openDebug", async () => {
+    ctx.handle("price:openDebug", ["main"], async () => {
         await fsp.mkdir(debugDir, { recursive: true });
         shell.openPath(debugDir);
     });
@@ -272,6 +288,14 @@ export function initPriceCheck(ctx) {
         isEnabled: () => st().enabled,
         /** Для автотестов: распознать в указанной точке экрана. */
         scanAt: (x, y) => request({ x, y }, true),
+        scanAuto: (x, y) => request({ x, y }, false),
+        /** Для автотестов: кадр — картинка (data URL), точка — в её пикселях. */
+        scanImage: (image, w, h, x, y, manual = false) => {
+            if (app.isPackaged || !win || !ready) return false;
+            scan = { x: -1e6, y: -1e6, t: Date.now(), tries: 1, busy: true, manual, test: true };
+            win.webContents.send("price:scan", { x, y, manual, debug: !!st().debug, display: { id: -1, bounds: { x: 0, y: 0, width: w, height: h }, scaleFactor: 1 }, testImage: image });
+            return true;
+        },
         window: () => win,
     };
 }
