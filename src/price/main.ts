@@ -433,8 +433,9 @@ desktop!.price.onScan(async (req: PriceScan) => {
         // DIP → пиксели кадра
         const kx = v.videoWidth / req.display.bounds.width;
         const ky = v.videoHeight / req.display.bounds.height;
-        // интерфейс игры масштабируется по высоте экрана (в тесте — по высоте картинки «экрана» 1080)
-        const s = (req.testImage ? 1080 : v.videoHeight) / 1080;
+        // интерфейс игры вписывается в 1920×1080: на 16:10 и 4:3 масштаб задаёт ширина, на широких — высота
+        // (в тесте картинка — кусок «экрана» 1080p, масштаб 1)
+        const s = req.testImage ? 1 : Math.min(v.videoWidth / 1920, v.videoHeight / 1080);
         const px = (req.x - req.display.bounds.x) * kx;
         const py = (req.y - req.display.bounds.y) * ky;
         // подсказка бывает левее и выше курсора, длинное название — в несколько строк
