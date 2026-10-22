@@ -98,11 +98,39 @@ function inside(base, rel) {
     return p === base || p.startsWith(base + path.sep) ? p : null;
 }
 
+/**
+ * Картинка предмета в клетках с tarkov.dev — для распознавания цены по иконке.
+ * Сервер картинок не отдаёт CORS, и окно цены не смогло бы прочитать её пиксели, поэтому картинка
+ * берётся здесь и один раз сохраняется на диск: дальше распознавание работает без сети.
+ */
+async function gridIcon(id) {
+    const file = path.join(USER_DATA, "icons", `${id}.webp`);
+    const headers = { "content-type": "image/webp", "cache-control": "max-age=604800", "x-content-type-options": "nosniff" };
+    if (DEV_URL) headers["access-control-allow-origin"] = originOf(DEV_URL);
+    try {
+        return new Response(await fsp.readFile(file), { headers });
+    } catch {
+        /* ещё не скачана */
+    }
+    try {
+        const r = await net.fetch(`https://assets.tarkov.dev/${id}-grid-image.webp`);
+        if (!r.ok) return new Response("not found", { status: 404 });
+        const buf = Buffer.from(await r.arrayBuffer());
+        await fsp.mkdir(path.dirname(file), { recursive: true });
+        await fsp.writeFile(file, buf);
+        return new Response(buf, { headers });
+    } catch {
+        return new Response("offline", { status: 503 });
+    }
+}
+
 function registerAppProtocol() {
     protocol.handle("app", async (req) => {
         const url = new URL(req.url);
         if (url.host !== "app") return new Response("not found", { status: 404 });
         let rel = decodeURIComponent(url.pathname).replace(/^\/+/, "") || "index.html";
+        const icon = /^icons\/([0-9a-f]{24})\.webp$/.exec(rel);
+        if (icon) return gridIcon(icon[1]);
         // данные и карты: сначала свежая копия пользователя, затем то, что пришло с приложением
         const bases = rel.startsWith("data/") || rel.startsWith("maps/") ? [USER_DATA, DIST, PUBLIC] : [DIST];
         for (const base of bases) {

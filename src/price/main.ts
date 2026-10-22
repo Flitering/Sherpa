@@ -11,6 +11,7 @@ import "./price.css";
 import { dataUrl, desktop, type PriceScan } from "../lib/desktop";
 import { advise, loadMarket, rub, type Market, type MarketItem } from "../lib/market";
 import { bestInLine, normalize, ocrOptions, similarity } from "../lib/ocr";
+import { findHoverCell, fits, hoverMiss, IconIndex, isHoverBg, makeSig } from "./iconscan";
 import type { Bundle, GameMode } from "../types";
 
 type TWorker = Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>;
@@ -216,7 +217,7 @@ const distTo = (b: Box, cx: number, cy: number) => Math.hypot(Math.max(b.x - cx,
  * и соседних строк (буквы поверх картинок предметов находятся не все, длинное название переносится).
  * Подпись клетки — короткое имя в правом верхнем углу предмета под курсором: выше курсора и правее него.
  */
-function findTooltipAndLabel(img: ImageData, cx: number, cy: number, s: number) {
+function findTooltipAndLabel(img: ImageData, cx: number, cy: number, s: number, cell: Box | null) {
     const lines = findTextLines(img, s);
     const blocks = groupBlocks(lines, s);
     const near = lines.filter((l) => distTo(l, cx, cy) <= 40 * s).sort((p, q) => distTo(p, cx, cy) - distTo(q, cx, cy));
@@ -252,6 +253,12 @@ function findTooltipAndLabel(img: ImageData, cx: number, cy: number, s: number) 
         (b) => !cluster.has(b) && b.w <= 160 * s && b.y + b.h <= cy + 8 * s && b.x + b.w >= cx - 8 * s && cy - b.y <= 260 * s && b.x + b.w - cx <= 260 * s,
     );
     labels.sort((p, q) => cy - p.y + 0.5 * (p.x + p.w - cx) - (cy - q.y + 0.5 * (q.x + q.w - cx)));
+    // известна клетка под курсором — подпись именно её: короткое имя в верхней полосе клетки. На подсвеченном
+    // фоне строки выше не находятся (там нужен тёмный фон), но место подписи известно и так
+    if (cell) {
+        const pad = Math.round(2 * s);
+        return { tooltip, label: { x: cell.x + pad, y: cell.y + Math.round(s), w: cell.w - 2 * pad, h: Math.round(15 * s) }, blocks };
+    }
     return { tooltip, label: labels[0] ?? null, blocks };
 }
 
@@ -334,21 +341,74 @@ function matchShort(text: string): Set<MarketItem> {
     return out;
 }
 
+/** Что видно по картинке: подсвеченная клетка под курсором. */
+interface IconView {
+    /** Предметы, которые помещаются в клетку (с поворотом). */
+    sized: Set<MarketItem>;
+    /** Похожесть картинок предметов на клетку — по убыванию (из уже загруженных). */
+    hits: Hit[];
+    /** Загружены картинки всех предметов этого размера — сравнение было со всеми. */
+    complete: boolean;
+}
+
 /**
  * Итог: полное имя из подсказки, если оно уверенное; иначе — лучший из предметов, чьё короткое имя
- * совпало с подписью клетки. Лучше ничего не показать, чем показать чужую цену.
+ * совпало с подписью клетки; иначе — по картинке. Размер клетки отсекает варианты другого размера,
+ * картинка выбирает среди прочитанного. Лучше ничего не показать, чем показать чужую цену.
  */
-function decide(full: Hit[], short: Set<MarketItem>): Hit | null {
+function decide(full: Hit[], short: Set<MarketItem>, icon: IconView | null): Hit | null {
+    if (full[0] && full[0].score >= 0.86) return full[0];
+    const iconOf = (it: MarketItem) => icon?.hits.find((h) => h.item === it)?.score ?? 0;
+    if (icon) {
+        // если ни один вариант не помещается в клетку, клетка особая (спецслот уменьшает картинку) — без отсева
+        const f = full.filter((h) => icon.sized.has(h.item));
+        if (f.length) full = f;
+        const sh = new Set([...short].filter((it) => icon.sized.has(it)));
+        if (sh.size) short = sh;
+    }
     const top = full[0];
     if (top && top.score >= 0.86) return top;
     if (short.size) {
-        const inShort = full.find((h) => short.has(h.item) && h.score >= 0.55);
-        if (inShort) return inShort;
+        const inShort = full.filter((h) => short.has(h.item) && h.score >= 0.55);
+        if (inShort.length) return inShort.reduce((a, b) => (b.score + 0.5 * iconOf(b.item) > a.score + 0.5 * iconOf(a.item) ? b : a));
         if (short.size === 1 && !top) return { item: [...short][0], score: 0.8 };
+        // несколько предметов с этим коротким именем — какой похож по картинке
+        if (icon) {
+            const r = [...short].map((item) => ({ item, score: iconOf(item) })).sort((a, b) => b.score - a.score);
+            if (r[0].score >= 0.6 && r[0].score - (r[1]?.score ?? 0) >= 0.03) return r[0];
+        }
+    }
+    // текст неуверенный — выбор по картинке среди прочитанного
+    if (icon) {
+        const c = full
+            .filter((h) => h.score >= 0.55 && iconOf(h.item) >= 0.6)
+            .map((h) => ({ ...h, sum: h.score + iconOf(h.item) }))
+            .sort((a, b) => b.sum - a.sum);
+        if (c.length && (c.length === 1 || c[0].sum - c[1].sum >= 0.05)) return c[0];
     }
     if (top && top.score >= 0.8 && (full[1]?.score ?? 0) < top.score - 0.04) return top;
+    // только картинка: сравнение было со всеми предметами этого размера, сходство заметное и с большим
+    // отрывом от следующего (похожие картинки — патроны, магазины — так не пройдут) и текст не спорит
+    const best = icon?.complete ? icon.hits[0] : undefined;
+    if (best && best.score >= 0.65 && best.score - (icon!.hits[1]?.score ?? 0) >= 0.15 && !(top && top.score >= 0.7 && top.item !== best.item)) return best;
     return null;
 }
+
+// ---------------- картинки предметов ----------------
+
+/** Картинка предмета в клетках: основной процесс берёт её с tarkov.dev и хранит на диске. */
+async function loadIcon(id: string): Promise<ImageData> {
+    const r = await fetch(dataUrl(`icons/${id}.webp`));
+    if (!r.ok) throw Object.assign(new Error(`картинка ${id}: ${r.status}`), { missing: r.status === 404 });
+    const bm = await createImageBitmap(await r.blob());
+    const c = new OffscreenCanvas(bm.width, bm.height);
+    const g = c.getContext("2d", { willReadFrequently: true })!;
+    g.drawImage(bm, 0, 0);
+    bm.close();
+    return g.getImageData(0, 0, c.width, c.height);
+}
+
+const icons = new IconIndex<MarketItem>(loadIcon);
 
 // ---------------- прогресс игрока (из общего хранилища приложения) ----------------
 
@@ -434,8 +494,8 @@ desktop!.price.onScan(async (req: PriceScan) => {
         const kx = v.videoWidth / req.display.bounds.width;
         const ky = v.videoHeight / req.display.bounds.height;
         // интерфейс игры вписывается в 1920×1080: на 16:10 и 4:3 масштаб задаёт ширина, на широких — высота
-        // (в тесте картинка — кусок «экрана» 1080p, масштаб 1)
-        const s = req.testImage ? 1 : Math.min(v.videoWidth / 1920, v.videoHeight / 1080);
+        // (в тесте картинка — кусок «экрана», масштаб задан тестом, обычно 1080p — 1)
+        const s = req.testImage ? req.testScale ?? 1 : Math.min(v.videoWidth / 1920, v.videoHeight / 1080);
         const px = (req.x - req.display.bounds.x) * kx;
         const py = (req.y - req.display.bounds.y) * ky;
         // подсказка бывает левее и выше курсора, длинное название — в несколько строк
@@ -453,7 +513,9 @@ desktop!.price.onScan(async (req: PriceScan) => {
         const g = c.getContext("2d", { willReadFrequently: true })!;
         g.drawImage(v.src, area.x, area.y, area.w, area.h, 0, 0, area.w, area.h);
         const img = g.getImageData(0, 0, area.w, area.h);
-        const { tooltip, label, blocks } = findTooltipAndLabel(img, px - area.x, py - area.y, s);
+        // подсвеченная клетка под курсором — для распознавания по картинке (подход RatScanner)
+        const cell = findHoverCell(img, px - area.x, py - area.y, s);
+        const { tooltip, label, blocks } = findTooltipAndLabel(img, px - area.x, py - area.y, s, cell);
         let debugPng = "";
         const box = tooltip;
         let text = "";
@@ -468,25 +530,40 @@ desktop!.price.onScan(async (req: PriceScan) => {
             full = matchFull(text);
             used = tooltip;
         }
-        // подпись клетки: проверка, если подсказка прочиталась неуверенно (или её нет, а нажата горячая клавиша)
+        // подпись клетки: проверка, если подсказка прочиталась неуверенно (или её нет, но есть клетка под курсором
+        // или нажата горячая клавиша)
         let short = new Set<MarketItem>();
-        if (label && (full[0]?.score ?? 0) < 0.86 && (tooltip || req.manual)) {
+        if (label && (full[0]?.score ?? 0) < 0.86 && (tooltip || cell || req.manual)) {
             await w.setParameters({ tessedit_pageseg_mode: "7" as never });
             labelText = (await w.recognize(toOcrCanvas(c, label, scale))).data.text;
             short = matchShort(labelText);
         }
-        const m = decide(full, short);
-        if (m && !used && label) used = label;
-        text = `подсказка: ${text.trim()} | подпись: ${labelText.trim()}`;
+        // картинка клетки: сравнение с картинками предметов того же размера
+        let icon: IconView | null = null;
+        if (cell && (full[0]?.score ?? 0) < 0.86) {
+            const cx = px - area.x, cy = py - area.y, k = 22 * s;
+            // курсор мыши (стрелка вниз-вправо от точки) закрывает часть картинки — без него
+            const sig = makeSig(img, cell, cell.cw, cell.ch, isHoverBg, (x, y) => x >= cx - 3 * s && y >= cy - 3 * s && x <= cx + 0.7 * k && y <= cy + k);
+            const sized = market!.list.filter((it) => fits(it, cell.cw, cell.ch) && !it.name.startsWith("!!!"));
+            const sizedSet = new Set(sized);
+            // то, что прочиталось, — сразу; остальные этого размера — в фоне, к следующим наведениям
+            await icons.prepare([...full.slice(0, 12).map((h) => h.item), ...short].filter((it) => sizedSet.has(it)));
+            const complete = icons.prepareSize(sized, cell.cw, cell.ch);
+            icon = { sized: sizedSet, hits: icons.rank(sig, sized), complete };
+        }
+        const m = decide(full, short, icon);
+        if (m && !used) used = cell ?? label;
+        const iconText = icon ? icon.hits.slice(0, 3).map((h) => `${h.item.short} ${h.score.toFixed(2)}`).join(", ") + (icon.complete ? "" : " (не все)") : "";
+        text = `подсказка: ${text.trim()} | подпись: ${labelText.trim()} | клетка: ${cell ? `${cell.cw}×${cell.ch}` : hoverMiss || "нет"} | картинка: ${iconText}`;
         if (req.debug) {
-            // разметка на кадре: строки — зелёным, подсказка — жёлтым, подпись клетки — голубым, курсор — красным
+            // разметка на кадре: строки — зелёным, подсказка — жёлтым, подпись клетки — голубым, клетка под курсором — оранжевым, курсор — красным
             const dc = document.createElement("canvas");
             dc.width = c.width;
             dc.height = c.height;
             const dg = dc.getContext("2d")!;
             dg.drawImage(c, 0, 0);
             dg.lineWidth = 1;
-            for (const [col, list] of [["#3c3", blocks], ["#fd0", tooltip ? [tooltip] : []], ["#3cf", label ? [label] : []]] as [string, Box[]][]) {
+            for (const [col, list] of [["#3c3", blocks], ["#fd0", tooltip ? [tooltip] : []], ["#3cf", label ? [label] : []], ["#f80", cell ? [cell] : []]] as [string, Box[]][]) {
                 dg.strokeStyle = col;
                 for (const b of list) dg.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
             }
@@ -494,7 +571,7 @@ desktop!.price.onScan(async (req: PriceScan) => {
             dg.fillRect(px - area.x - 2, py - area.y - 2, 5, 5);
             debugPng = dc.toDataURL("image/png");
         }
-        if (req.debug) desktop!.price.debug({ png: debugPng, text, box: { tooltip, label, blocks: blocks.map((b) => [b.x, b.y, b.w, b.h, b.lines]) }, item: m?.item.name ?? null, score: m?.score ?? null });
+        if (req.debug) desktop!.price.debug({ png: debugPng, text, box: { tooltip, label, cell, blocks: blocks.map((b) => [b.x, b.y, b.w, b.h, b.lines]) }, item: m?.item.name ?? null, score: m?.score ?? null });
         if (!m && !req.manual) {
             desktop!.price.result({ found: false, tooltip: !!box, width: 0, height: 0 });
             return;

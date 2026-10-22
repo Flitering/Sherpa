@@ -151,7 +151,7 @@ npm run dist          # установщик в release/
 |---|---|
 | `electron/main.mjs` | Окна (главное и прозрачный виджет), протокол `app://`, поиск папок игры, чтение файлов, горячие клавиши, обновление данных |
 | `electron/preload.cjs`, `src/lib/desktop.ts` | Мост между окном и системой; «папки» поверх файловой системы для кода навигатора |
-| `electron/pricecheck.mjs`, `src/price/` | Цена по наведению: курсор, захват экрана, поиск подсказки игры, распознавание названия |
+| `electron/pricecheck.mjs`, `src/price/` | Цена по наведению: курсор, захват экрана, поиск подсказки игры, распознавание названия; `src/price/iconscan.ts` — распознавание по картинке в клетке (как RatScanner, но при наведении) |
 | `electron/stylemaps.mjs`, `src/lib/styledMaps.ts` | Перекраска растровых карт (Лаборатория, Лабиринт, Ледокол) в стиль схем tarkov.dev |
 | `electron/updater.mjs` | Обновление по кнопке (GitHub Releases) |
 | `src/overlay/`, `src/components/MiniMap.tsx`, `src/lib/hudModel.ts` | Виджет поверх игры, миникарта, расчёт HUD |

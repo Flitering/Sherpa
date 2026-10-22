@@ -25,6 +25,8 @@ export interface PriceScan {
     display: { id: number; bounds: { x: number; y: number; width: number; height: number }; scaleFactor: number };
     /** Только автотесты (несобранная версия): кадр из картинки вместо захвата экрана. */
     testImage?: string;
+    /** Масштаб интерфейса на тестовой картинке (по умолчанию 1 — кусок «экрана» 1080p). */
+    testScale?: number;
 }
 export interface PriceResult {
     found: boolean;
