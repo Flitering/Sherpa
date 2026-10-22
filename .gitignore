@@ -3,6 +3,7 @@ dist/
 # данные и карты скачиваются командой npm run sync
 public/data/
 public/maps/svg/
+public/maps/styled/
 # локальные файлы
 *.log
 .DS_Store

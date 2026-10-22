@@ -443,3 +443,15 @@ kbd { display: inline-block; font: 11px/1.4 var(--font); padding: 1px 6px; color
 .upd-badge { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 3px 9px; color: var(--green); border-color: #4c5f33; }
 .upd-badge.ready { background: var(--green); color: #0b0b09; border-color: var(--green); font-weight: 700; }
 .conn + .upd-badge + .setup-btn { margin-left: 0; }
+/* окна поверх шапки: иначе шапка безрамочного окна перехватывает клики как «перетаскивание» */
+.modal-back { -webkit-app-region: no-drag; }
+/* условия использования */
+.modal.terms { width: min(760px, 100%); }
+.terms-body { padding: 6px 20px 18px; overflow: auto; font-size: 13px; line-height: 1.5; }
+.terms-body h4 { margin: 14px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--tan); }
+.terms-body p { margin: 4px 0; }
+.terms-body ul { margin: 4px 0; padding-left: 18px; }
+.terms-body li { margin: 2px 0; }
+.terms-body table { border-collapse: collapse; margin: 6px 0; font-size: 12px; width: 100%; }
+.terms-body th, .terms-body td { border: 1px solid var(--line); padding: 3px 6px; text-align: left; vertical-align: top; }
+.terms-body th { color: var(--tan); font-weight: 700; }

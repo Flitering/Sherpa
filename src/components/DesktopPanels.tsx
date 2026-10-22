@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { desktop, type AppPrefs, type PriceState, type UpdateState } from "../lib/desktop";
+import TermsModal from "./TermsModal";
 
 /** Состояние обновления — общее для шапки и вкладки «Навигатор». */
 export function useUpdate(): [UpdateState | undefined, () => void] {
@@ -45,6 +46,7 @@ const UPDATE_TEXT: Record<UpdateState["status"], string> = {
 export function AppPanel() {
     const [s, act] = useUpdate();
     const [prefs, setPrefs] = useState<AppPrefs>();
+    const [terms, setTerms] = useState(false);
     useEffect(() => {
         desktop?.app.prefs().then(setPrefs);
     }, []);
@@ -71,6 +73,10 @@ export function AppPanel() {
                     (Sherpa продолжает ловить рейды и цены)
                 </label>
             )}
+            <div className="row">
+                <button onClick={() => setTerms(true)}>Условия использования</button>
+            </div>
+            {terms && <TermsModal onClose={() => setTerms(false)} />}
         </>
     );
 }

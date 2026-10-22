@@ -10,6 +10,7 @@ import { loadSvgText } from "../lib/useNavGrid";
 import { layerRu, type DetailRoute } from "../lib/navdetail";
 import { heatmapFor } from "../lib/heatmap";
 import { classifyHazards, type HazardClasses } from "../lib/hazards";
+import { loadStyled, styledBounds, styledUrl, type StyledEntry } from "../lib/styledMaps";
 
 export interface MapFocus {
     position: Vec3;
@@ -54,7 +55,7 @@ function MapView(props: Props) {
     const detailLayer = useRef<L.LayerGroup>();
     /** Счётчик пересоздания карты: слои перерисовываются после смены локации/подложки. */
     const [mapGen, setMapGen] = useState(0);
-    const base = useRef<{ svg?: SVGSVGElement; image?: L.ImageOverlay; url?: string; tile?: L.TileLayer }>({});
+    const base = useRef<{ svg?: SVGSVGElement; image?: L.ImageOverlay; url?: string; tile?: L.TileLayer; styled?: L.ImageOverlay; styledIdx?: Record<string, StyledEntry> }>({});
     const [level, setLevel] = useState(-1);
     const [svgReady, setSvgReady] = useState(0);
     const [zoom, setZoom] = useState(0);
@@ -84,15 +85,30 @@ function MapView(props: Props) {
         lmap.current = m;
         setLevel(-1);
 
-        if (useTile && display.tilePath) {
-            base.current.tile = L.tileLayer(display.tilePath, {
-                tileSize: display.tileSize ?? 256,
-                bounds,
-                maxNativeZoom: display.maxZoom,
-                maxZoom: Math.max(7, display.maxZoom),
-            }).addTo(m);
-        }
         let cancelled = false;
+        if (useTile && display.tilePath) {
+            const addTiles = () => {
+                base.current.tile = L.tileLayer(display.tilePath!, {
+                    tileSize: display.tileSize ?? 256,
+                    bounds,
+                    maxNativeZoom: display.maxZoom,
+                    maxZoom: Math.max(7, display.maxZoom),
+                }).addTo(m);
+                base.current.tile.bringToBack();
+            };
+            if (display.svgPath) addTiles(); // «спутник» у карт со схемой
+            else
+                // у карт без SVG — своя перекрашенная схема, если она готова, иначе тайлы как есть
+                loadStyled().then((idx) => {
+                    if (cancelled) return;
+                    const e = idx[display.tilePath!];
+                    if (!e) return addTiles();
+                    base.current.styledIdx = idx;
+                    base.current.styled = L.imageOverlay(styledUrl(e), styledBounds(display, e), { className: "base-map styled", interactive: false }).addTo(m);
+                    base.current.styled.bringToBack();
+                    setSvgReady((n) => n + 1);
+                });
+        }
         if (display.svgPath && !useTile) {
             loadSvgText(display.svgPath)
                 .then((text) => {
@@ -132,7 +148,7 @@ function MapView(props: Props) {
 
     // ---- этажи ----
     useEffect(() => {
-        const { svg, tile, image } = base.current;
+        const { svg, tile, image, styled, styledIdx } = base.current;
         const layer = level >= 0 ? levels[level] : undefined;
         if (svg && image) {
             const levelIds = new Set(display.layers.map((l) => l.svgLayer).filter(Boolean));
@@ -148,6 +164,13 @@ function MapView(props: Props) {
             base.current.url = url;
         }
         if (tile && display.tilePath) tile.setUrl(layer?.tilePath ?? display.tilePath);
+        if (styled && styledIdx) {
+            const e = styledIdx[layer?.tilePath ?? display.tilePath!];
+            if (e) {
+                styled.setUrl(styledUrl(e));
+                styled.setBounds(styledBounds(display, e));
+            }
+        }
     }, [level, svgReady, display, levels, useTile]);
 
     // ---- метки: отдельные слои, каждый перерисовывается только при своих изменениях ----
@@ -165,7 +188,8 @@ function MapView(props: Props) {
         if (!g) return;
         g.clearLayers();
         if (!props.showLabels) return;
-        for (const l of display.labels) {
+        // крупные подписи первыми: при наложении остаются они
+        for (const l of [...display.labels].sort((a, b) => b.size - a.size)) {
             if (l.size < labelMin) continue;
             L.marker(toLatLng(l), {
                 icon: L.divIcon({
@@ -177,25 +201,55 @@ function MapView(props: Props) {
                 keyboard: false,
             }).addTo(g);
         }
+        requestAnimationFrame(declutterLabels);
     }, [props.showLabels, labelMin, display, mapGen]);
 
+    /** Прячет подписи, которые налезают на уже показанные (порядок — по важности). */
+    function declutterLabels() {
+        const g = layers.current.labels;
+        if (!g) return;
+        const kept: DOMRect[] = [];
+        g.eachLayer((mk) => {
+            const span = (mk as L.Marker).getElement()?.firstElementChild as HTMLElement | null;
+            if (!span) return;
+            span.style.visibility = "";
+            const r = span.getBoundingClientRect();
+            const hit = kept.some((k) => r.left < k.right + 4 && r.right > k.left - 4 && r.top < k.bottom + 2 && r.bottom > k.top - 2);
+            if (hit) span.style.visibility = "hidden";
+            else kept.push(r);
+        });
+    }
+    useEffect(() => {
+        const m = lmap.current;
+        if (!m) return;
+        const h = () => requestAnimationFrame(declutterLabels);
+        m.on("zoomend", h);
+        return () => {
+            m.off("zoomend", h);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mapGen]);
+
     // опасные зоны: килбоксы (мины, края карты) — чёткими блоками; зоны внутри карты — тепловой картой
-    const [hzClasses, setHzClasses] = useState<HazardClasses | null>(null);
+    // классы зон помнят, к какой карте относятся: иначе сразу после переключения зоны прошлой
+    // карты успевали нарисоваться (и закэшироваться) в координатах новой
+    const [hzState, setHzState] = useState<{ map: GameMap; classes: HazardClasses } | null>(null);
+    const hzClasses = hzState?.map === gameMap ? hzState.classes : null;
     useEffect(() => {
         let cancelled = false;
-        setHzClasses(null);
         (gameMap.display.svgPath ? loadSvgText(gameMap.display.svgPath) : Promise.resolve(null))
             .then((text) => classifyHazards(gameMap, text))
-            .then((r) => !cancelled && setHzClasses(r))
-            .catch(() => !cancelled && setHzClasses({ killbox: gameMap.hazards.filter((h) => h.outline), heat: [] }));
+            .then((r) => !cancelled && setHzState({ map: gameMap, classes: r }))
+            .catch(() => !cancelled && setHzState({ map: gameMap, classes: { killbox: gameMap.hazards.filter((h) => h.outline), heat: [] } }));
         return () => {
             cancelled = true;
         };
     }, [gameMap]);
     useEffect(() => {
         const g = layers.current.hazards;
-        if (!g || !hzClasses) return;
+        if (!g) return;
         g.clearLayers();
+        if (!hzClasses) return;
         if (!props.showHazards) return;
         const ll = (o: [number, number][]) => o.map(([x, z]) => toLatLng({ x, z }));
         // тепло: снайперские зоны внутри карты, обстрел, стационарное оружие
@@ -388,6 +442,8 @@ function MapView(props: Props) {
         const m = lmap.current;
         const fix = props.fix;
         if (!m || !fix || !props.follow) return;
+        // позиция с другой карты (старый скриншот) — не уводим вид за край
+        if (!toBounds(display.bounds).pad(0.1).contains(toLatLng(fix.position))) return;
         m.setView(toLatLng(fix.position), Math.max(m.getZoom(), display.minZoom + 2), { animate: true });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [props.fix?.time, props.follow]);

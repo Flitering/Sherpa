@@ -19,6 +19,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { initPriceCheck } from "./pricecheck.mjs";
+import { styleMaps } from "./stylemaps.mjs";
 import { initUpdater } from "./updater.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -511,6 +512,10 @@ function registerIpc() {
             fetch: (url, init) => net.fetch(url, init), // сеть Chromium — как в браузере
             log: send,
         });
+        // схемы растровых карт — по свежим данным
+        await styleMaps({ dataDir: path.join(USER_DATA, "data"), outDir: path.join(USER_DATA, "maps", "styled"), seedDir: path.join(DIST, "maps", "styled"), fetch: (u) => net.fetch(u), log: send }).catch((err) =>
+            send("Схемы карт: " + err.message),
+        );
         settings.lastSync = Date.now();
         saveSettings();
         return settings.lastSync;

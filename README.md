@@ -149,6 +149,7 @@ npm run dist          # установщик в release/
 | `electron/main.mjs` | Окна (главное и прозрачный виджет), протокол `app://`, поиск папок игры, чтение файлов, горячие клавиши, обновление данных |
 | `electron/preload.cjs`, `src/lib/desktop.ts` | Мост между окном и системой; «папки» поверх файловой системы для кода навигатора |
 | `electron/pricecheck.mjs`, `src/price/` | Цена по наведению: курсор, захват экрана, поиск подсказки игры, распознавание названия |
+| `electron/stylemaps.mjs`, `src/lib/styledMaps.ts` | Перекраска растровых карт (Лаборатория, Лабиринт, Ледокол) в стиль схем tarkov.dev |
 | `electron/updater.mjs` | Обновление по кнопке (GitHub Releases) |
 | `src/overlay/`, `src/components/MiniMap.tsx`, `src/lib/hudModel.ts` | Виджет поверх игры, миникарта, расчёт HUD |
 | `scripts/sync-data.mjs` | Качает `json.tarkov.dev/{regular,pve}/*`, конфиг карт tarkov-dev и SVG-карты; собирает `public/data/*.json` |
@@ -167,6 +168,11 @@ npm run dist          # установщик в release/
 | `src/components/Hud.tsx` | HUD навигатора и радар |
 
 Стек: Electron, React 18, TypeScript, Vite, Leaflet, Tesseract.js.
+
+## Условия использования
+
+Sherpa — неофициальный бесплатный проект, не связанный с Battlestate Games. Подробно — в [TERMS.md](TERMS.md)
+(эти же условия показываются в установщике и в приложении).
 
 ## Данные и лицензии
 

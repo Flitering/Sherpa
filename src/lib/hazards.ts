@@ -66,6 +66,21 @@ async function drawnMask(map: GameMap, svgText: string) {
     }
 }
 
+/** Площадь многоугольника, м². */
+function area(poly: [number, number][]) {
+    let s = 0;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) s += (poly[j][0] + poly[i][0]) * (poly[j][1] - poly[i][1]);
+    return Math.abs(s / 2);
+}
+
+/**
+ * Служебные триггеры игры, а не ловушки: огромные «опасные зоны» (на Лабиринте — 54×58 м под всей ареной).
+ * Настоящие ловушки и растяжки — несколько квадратных метров.
+ */
+function isServiceTrigger(h: Hazard) {
+    return area(h.outline!) > 800;
+}
+
 export interface HazardClasses {
     /** Килбоксы: нельзя ходить, рисуются чёткими блоками. */
     killbox: Hazard[];
@@ -86,6 +101,7 @@ export function classifyHazards(map: GameMap, svgText: string | null): Promise<H
             const out: HazardClasses = { killbox: [], heat: [] };
             for (const h of map.hazards) {
                 if (!h.outline?.length) continue;
+                if (h.type === "hazard" && isServiceTrigger(h)) continue;
                 if (h.type !== "sniper") {
                     out.killbox.push(h); // минные поля и прочие ловушки
                     continue;

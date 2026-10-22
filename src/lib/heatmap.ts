@@ -8,12 +8,12 @@ import { makeCRS, toBounds } from "./crs";
 
 /** Сила источников (0..1) и размытие краёв, м. */
 const STYLE = {
-    sniper: { alpha: 0.28, blur: 16 },
-    artillery: { alpha: 0.22, blur: 20 },
-    other: { alpha: 0.4, blur: 10 },
+    sniper: { alpha: 0.28, blur: 9 },
+    artillery: { alpha: 0.22, blur: 12 },
+    other: { alpha: 0.4, blur: 6 },
 };
 /** Радиус «тепла» вокруг стационарного оружия, м. */
-const WEAPON_RADIUS = { utes: 45, ags: 35, mg: 35 };
+const WEAPON_RADIUS = { utes: 28, ags: 22, mg: 22 };
 
 /** Палитра: прозрачно → жёлтый → оранжевый → красный. */
 function ramp(t: number): [number, number, number, number] {
@@ -119,8 +119,9 @@ export function buildHeatmap(map: GameMap, heatZones: Hazard[]): Heatmap | null 
     return { url: c.toDataURL("image/png"), bounds };
 }
 
-const cache = new Map<string, Heatmap | null>();
+// по самому объекту карты: у PvP и PvE свои данные, ключ по имени их смешивал
+const cache = new WeakMap<GameMap, Heatmap | null>();
 export function heatmapFor(map: GameMap, heatZones: Hazard[]): Heatmap | null {
-    if (!cache.has(map.key)) cache.set(map.key, buildHeatmap(map, heatZones));
-    return cache.get(map.key)!;
+    if (!cache.has(map)) cache.set(map, buildHeatmap(map, heatZones));
+    return cache.get(map)!;
 }

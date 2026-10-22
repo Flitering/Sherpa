@@ -3,6 +3,7 @@ import L from "leaflet";
 import type { MapDisplay } from "../types";
 import { makeCRS, toBounds } from "../lib/crs";
 import { loadSvgText } from "../lib/useNavGrid";
+import { loadStyled, styledBounds, styledUrl } from "../lib/styledMaps";
 import type { HudPoint } from "../lib/hudModel";
 
 interface Props {
@@ -72,6 +73,29 @@ function loadBase(mapKey: string, display: MapDisplay): Promise<Base> {
                     canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
                 } finally {
                     URL.revokeObjectURL(url);
+                }
+            } catch {
+                canvas = null;
+            }
+        }
+        if (!display.svgPath && display.tilePath) {
+            // перекрашенная схема растровой карты: кладём её в те же пиксели
+            try {
+                const e = (await loadStyled())[display.tilePath];
+                if (e) {
+                    const img = new Image();
+                    img.src = styledUrl(e);
+                    await img.decode();
+                    const sb = styledBounds(display, e);
+                    const a = crs.latLngToPoint(sb.getNorthWest(), 0);
+                    const c = crs.latLngToPoint(sb.getSouthEast(), 0);
+                    const px = (pt: L.Point): [number, number] => [((pt.x - rect.min!.x) / rw) * w, ((pt.y - rect.min!.y) / rh) * h];
+                    const [ax, ay] = px(a);
+                    const [cx, cy] = px(c);
+                    canvas = document.createElement("canvas");
+                    canvas.width = w;
+                    canvas.height = h;
+                    canvas.getContext("2d")!.drawImage(img, Math.min(ax, cx), Math.min(ay, cy), Math.abs(cx - ax), Math.abs(cy - ay));
                 }
             } catch {
                 canvas = null;

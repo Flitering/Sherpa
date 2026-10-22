@@ -6,6 +6,7 @@ import type { NavLink } from "./NavigatorTab";
 import type { LogState } from "../lib/gamelogs";
 import { fsSupported } from "../lib/navigator";
 import { desktop } from "../lib/desktop";
+import TermsModal from "./TermsModal";
 
 interface Props {
     state: AppState;
@@ -30,6 +31,7 @@ const copy = (t: string) => navigator.clipboard?.writeText(t).catch(() => {});
 /** Мастер первой настройки: что подключить, зачем и как проверить. */
 export default function SetupWizard(p: Props) {
     const [step, setStep] = useState(0);
+    const [terms, setTerms] = useState(false);
     const [notif, setNotif] = useState(typeof Notification !== "undefined" ? Notification.permission : "denied");
     const supported = !!desktop || fsSupported();
     const me = p.state.players.find((x) => x.id === p.state.activePlayer) ?? p.state.players[0];
@@ -65,6 +67,14 @@ export default function SetupWizard(p: Props) {
                                 <b>Безопасно для аккаунта.</b> Приложение не читает память игры, не встраивается в неё и не нажимает клавиши. Оно только читает файлы, которые
                                 игра сама пишет на диск: скриншоты и логи.
                             </div>
+                            <p className="hint">
+                                Sherpa — неофициальный бесплатный проект, не связанный с Battlestate Games. Продолжая, ты принимаешь{" "}
+                                <button className="link" onClick={() => setTerms(true)}>
+                                    условия использования
+                                </button>
+                                .
+                            </p>
+                            {terms && <TermsModal onClose={() => setTerms(false)} />}
                             {!supported && <div className="wiz-warn">Этот браузер не умеет следить за папками. Установи приложение Sherpa для Windows — в нём навигатор работает в любом случае.</div>}
                         </>
                     )}

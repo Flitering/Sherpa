@@ -11,6 +11,7 @@ import { dataUrl, desktop, desktopDir, type OverlayAction, type OverlayState } f
 import { computeHud, raidOffer, type OverlayModel } from "./lib/hudModel";
 import WindowControls from "./components/TitleBar";
 import { UpdateBadge } from "./components/DesktopPanels";
+import { resetStyled } from "./lib/styledMaps";
 import { detailRoute, type DetailRoute } from "./lib/navdetail";
 import { dist as straightDist } from "./lib/route";
 import {
@@ -876,7 +877,10 @@ export default function App() {
                                         autoOverlay={state.autoOverlay !== false}
                                         setAutoOverlay={(b) => setState((st) => ({ ...st, autoOverlay: b }))}
                                         overlay={ovState}
-                                        onDataUpdated={() => setDataRev((n) => n + 1)}
+                                        onDataUpdated={() => {
+                                            resetStyled();
+                                            setDataRev((n) => n + 1);
+                                        }}
                                     />
                                 </>
                             )}
