@@ -412,6 +412,31 @@ function registerIpc() {
     ipcMain.handle("win:close", (e) => BrowserWindow.fromWebContents(e.sender)?.close());
     ipcMain.handle("win:isMaximized", (e) => !!BrowserWindow.fromWebContents(e.sender)?.isMaximized());
     ipcMain.handle("app:info", () => ({ version: app.getVersion(), userData: USER, content: USER_DATA, dev: !!DEV_URL }));
+    // прогресс игроков: копия в файле (основное хранилище интерфейса — localStorage в этой же папке)
+    const PROGRESS = path.join(USER, "progress.json");
+    const BACKUPS = path.join(USER, "backups");
+    ipcMain.handle("store:load", async () => {
+        for (const p of [PROGRESS, PROGRESS + ".tmp"]) {
+            try {
+                return await fsp.readFile(p, "utf8");
+            } catch {
+                /* следующий вариант */
+            }
+        }
+        return null;
+    });
+    ipcMain.handle("store:save", async (_e, json) => {
+        if (typeof json !== "string" || json.length > 20_000_000) return;
+        await fsp.mkdir(BACKUPS, { recursive: true });
+        // запись через временный файл: прогресс не побьётся, если компьютер выключится посреди записи
+        await fsp.writeFile(PROGRESS + ".tmp", json);
+        await fsp.rename(PROGRESS + ".tmp", PROGRESS);
+        // копия на каждый день, хранятся 7 последних
+        const day = new Date().toISOString().slice(0, 10);
+        await fsp.writeFile(path.join(BACKUPS, `progress-${day}.json`), json);
+        const old = (await fsp.readdir(BACKUPS)).filter((n) => n.startsWith("progress-")).sort().slice(0, -7);
+        for (const n of old) await fsp.rm(path.join(BACKUPS, n), { force: true });
+    });
     ipcMain.handle("app:prefs", () => settings.prefs);
     ipcMain.handle("app:setPrefs", (_e, patch) => {
         settings.prefs = { ...settings.prefs, ...patch };

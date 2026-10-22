@@ -1,6 +1,7 @@
 // Локальное хранение прогресса в браузере (localStorage), импорт и экспорт в файл.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { desktop } from "./desktop";
 import type { GameMode, Player } from "../types";
 import type { RaidSettings } from "./raids";
 
@@ -42,31 +43,54 @@ function initial(): AppState {
     return { version: 1, mode: "regular", mapKey: "streets-of-tarkov", activePlayer: me.id, players: [me, newPlayer("Игрок 2", 1)] };
 }
 
-function load(): AppState {
+function parse(raw: string | null): AppState | null {
+    if (!raw) return null;
     try {
-        const raw = localStorage.getItem(KEY);
-        if (raw) {
-            const s = JSON.parse(raw) as AppState;
-            if (s.version === 1 && s.players?.length) {
-                // старые имена по умолчанию → «Игрок N»
-                s.players = s.players.map((p, i) => (p.name === "Я" || p.name === "Друг" ? { ...p, name: `Игрок ${i + 1}` } : p));
-                return s;
-            }
-        }
+        const s = JSON.parse(raw) as AppState;
+        if (s.version !== 1 || !s.players?.length) return null;
+        // старые имена по умолчанию → «Игрок N»
+        s.players = s.players.map((p, i) => (p.name === "Я" || p.name === "Друг" ? { ...p, name: `Игрок ${i + 1}` } : p));
+        return s;
     } catch {
-        /* повреждённые данные — начинаем заново */
+        return null; // повреждённые данные
     }
-    return initial();
+}
+
+let fromStorage = false;
+function load(): AppState {
+    let raw: string | null = null;
+    try {
+        raw = localStorage.getItem(KEY);
+    } catch {
+        /* хранилище недоступно */
+    }
+    const s = parse(raw);
+    fromStorage = !!s;
+    return s ?? initial();
 }
 
 export function usePersistentState() {
     const [state, setState] = useState<AppState>(load);
+    // приложение: если внутреннее хранилище пустое (сбой, перенос), прогресс восстанавливается из файла
+    const restored = useRef(!desktop || fromStorage);
     useEffect(() => {
+        if (restored.current) return;
+        desktop!.store.load().then((raw) => {
+            const s = parse(raw);
+            restored.current = true;
+            if (s) setState(s);
+        });
+    }, []);
+    useEffect(() => {
+        const json = JSON.stringify(state);
         try {
-            localStorage.setItem(KEY, JSON.stringify(state));
+            localStorage.setItem(KEY, json);
         } catch {
             /* приватный режим браузера — прогресс просто не сохранится */
         }
+        if (!desktop || !restored.current) return; // не затираем файл, пока не прочитали его
+        const t = setTimeout(() => desktop!.store.save(json).catch(() => {}), 800);
+        return () => clearTimeout(t);
     }, [state]);
     return [state, setState] as const;
 }
@@ -84,4 +108,11 @@ export async function importState(file: File): Promise<AppState> {
     const s = JSON.parse(await file.text()) as AppState;
     if (s.version !== 1 || !Array.isArray(s.players)) throw new Error("Это не файл прогресса Sherpa");
     return s;
+}
+
+/** Удалить игрока; если это был «я» — «я» становится первый из оставшихся. */
+export function removePlayer(s: AppState, id: string): AppState {
+    const players = s.players.filter((p) => p.id !== id);
+    if (!players.length) return s;
+    return { ...s, players, activePlayer: s.activePlayer === id ? players[0].id : s.activePlayer };
 }

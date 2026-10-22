@@ -47,8 +47,10 @@ export function AppPanel() {
     const [s, act] = useUpdate();
     const [prefs, setPrefs] = useState<AppPrefs>();
     const [terms, setTerms] = useState(false);
+    const [dir, setDir] = useState<string>();
     useEffect(() => {
         desktop?.app.prefs().then(setPrefs);
+        desktop?.app.info().then((i) => setDir(i.userData));
     }, []);
     if (!desktop || !s) return null;
     return (
@@ -73,7 +75,13 @@ export function AppPanel() {
                     (Sherpa продолжает ловить рейды и цены)
                 </label>
             )}
+            {dir && (
+                <p className="hint">
+                    Прогресс и настройки хранятся в <code>{dir}</code> (плюс копии за 7 дней в папке backups). Обновление и переустановка их не удаляют.
+                </p>
+            )}
             <div className="row">
+                {dir && <button onClick={() => desktop!.app.showFolder(dir)}>Открыть папку данных</button>}
                 <button onClick={() => setTerms(true)}>Условия использования</button>
             </div>
             {terms && <TermsModal onClose={() => setTerms(false)} />}

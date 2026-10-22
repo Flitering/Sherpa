@@ -1,7 +1,8 @@
 import { useState } from "react";
 import type { GameMode } from "../types";
 import type { AppState } from "../lib/store";
-import { newPlayer } from "../lib/store";
+import { newPlayer, removePlayer } from "../lib/store";
+import DeletePlayer from "./DeletePlayer";
 import type { NavLink } from "./NavigatorTab";
 import type { LogState } from "../lib/gamelogs";
 import { fsSupported } from "../lib/navigator";
@@ -106,6 +107,7 @@ export default function SetupWizard(p: Props) {
                                             }
                                         />
                                     </label>
+                                    {p.state.players.length > 1 && <DeletePlayer name={pl.name} onDelete={() => p.setState((s) => removePlayer(s, pl.id))} />}
                                 </div>
                             ))}
                             <div className="row">

@@ -455,3 +455,12 @@ kbd { display: inline-block; font: 11px/1.4 var(--font); padding: 1px 6px; color
 .terms-body table { border-collapse: collapse; margin: 6px 0; font-size: 12px; width: 100%; }
 .terms-body th, .terms-body td { border: 1px solid var(--line); padding: 3px 6px; text-align: left; vertical-align: top; }
 .terms-body th { color: var(--tan); font-weight: 700; }
+/* удаление игрока: кнопка в строке справа, подтверждение вторым нажатием */
+.player { flex-wrap: nowrap; }
+.player .muted { white-space: nowrap; font-size: 12px; }
+.player .del-player { margin-left: auto; flex: none; padding: 3px 8px; color: var(--dim); }
+.player .del-player:hover { color: var(--red); border-color: var(--red); }
+.player .del-player.armed { color: #fff; background: var(--red); border-color: var(--red); }
+.player label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.player .pname { flex: 1 1 90px; min-width: 60px; width: auto; max-width: 160px; }
+.player input[type="number"] { margin-left: 0; width: 50px; }

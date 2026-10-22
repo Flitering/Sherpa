@@ -68,6 +68,7 @@ export interface SherpaApi {
         prefs(): Promise<AppPrefs>;
         setPrefs(patch: Partial<AppPrefs>): Promise<AppPrefs>;
     };
+    store: { load(): Promise<string | null>; save(json: string): Promise<void> };
     price: {
         get(): Promise<PriceState>;
         set(patch: Partial<PriceSettings>): Promise<PriceState>;

@@ -23,6 +23,10 @@ contextBridge.exposeInMainWorld("sherpa", {
         prefs: () => ipcRenderer.invoke("app:prefs"),
         setPrefs: (patch) => ipcRenderer.invoke("app:setPrefs", patch),
     },
+    store: {
+        load: () => ipcRenderer.invoke("store:load"),
+        save: (json) => ipcRenderer.invoke("store:save", json),
+    },
     price: {
         get: () => ipcRenderer.invoke("price:get"),
         set: (patch) => ipcRenderer.invoke("price:set", patch),

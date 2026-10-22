@@ -1,5 +1,7 @@
 import type { Player } from "../types";
-import { exportState, importState, newPlayer, type AppState } from "../lib/store";
+import { exportState, importState, newPlayer, removePlayer, type AppState } from "../lib/store";
+import { desktop } from "../lib/desktop";
+import DeletePlayer from "./DeletePlayer";
 
 interface Props {
     state: AppState;
@@ -28,14 +30,7 @@ export default function PlayersTab({ state, setState }: Props) {
                     <span className="muted">
                         {Object.values(p.tasks).filter((s) => s === "active").length} акт. / {Object.values(p.tasks).filter((s) => s === "done").length} вып.
                     </span>
-                    {state.players.length > 1 && (
-                        <button
-                            title="Удалить игрока"
-                            onClick={() => confirm(`Удалить игрока «${p.name}» и его прогресс?`) && setState({ ...state, players: state.players.filter((x) => x.id !== p.id) })}
-                        >
-                            ✕
-                        </button>
-                    )}
+                    {state.players.length > 1 && <DeletePlayer name={p.name} onDelete={() => setState(removePlayer(state, p.id))} />}
                 </div>
             ))}
             <div className="row">
@@ -60,7 +55,9 @@ export default function PlayersTab({ state, setState }: Props) {
                 </label>
             </div>
             <p className="hint">
-                Прогресс хранится только в этом браузере. Скоро: автоматическая синхронизация через TarkovTracker (командный прогресс по API-токену).
+                {desktop
+                    ? "Прогресс сохраняется на этом компьютере автоматически, с резервными копиями за последние дни; обновления приложения его не трогают. Файл — чтобы перенести прогресс на другой компьютер."
+                    : "Прогресс хранится в этом браузере. Файл — чтобы перенести его в другой браузер или на другой компьютер."}
             </p>
         </div>
     );
