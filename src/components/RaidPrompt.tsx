@@ -10,10 +10,12 @@ interface Props {
     /** overlay — открыть окно навигатора поверх игры (нужен клик пользователя — он и есть). */
     onStart: (raid: number, overlay: boolean) => void;
     onDismiss: () => void;
+    /** От чего построен маршрут и какие выходы учтены. */
+    note?: string;
 }
 
 /** Плашка «Рейд начался»: выбрать маршрут и открыть навигатор одним нажатием. */
-export default function RaidPrompt({ mapName, startedAt, plan, defaultRaid, onStart, onDismiss }: Props) {
+export default function RaidPrompt({ mapName, startedAt, plan, defaultRaid, onStart, onDismiss, note }: Props) {
     const [raid, setRaid] = useState(defaultRaid);
     const has = plan.raids.length > 0;
     return (
@@ -21,6 +23,7 @@ export default function RaidPrompt({ mapName, startedAt, plan, defaultRaid, onSt
             <div className="rp-title">
                 ⚑ Рейд начался · <b>{mapName}</b> · {new Date(startedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
             </div>
+            {note && <div className="rp-note">{note}</div>}
             {has ? (
                 <>
                     <select value={raid} onChange={(e) => setRaid(+e.target.value)}>

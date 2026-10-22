@@ -153,6 +153,7 @@ async function buildMode(mode, mapConfigs) {
 
     const tt = translator(tasksRu.data, tasksEn.data);
     const mt = translator(mapsRu.data, mapsEn.data);
+    const mtEn = translator(mapsEn.data);
     const it = translator(itemsRu.data, itemsEn.data);
     const trt = translator(tradersRu.data, tradersEn.data);
 
@@ -184,6 +185,8 @@ async function buildMode(mode, mapConfigs) {
             display: cfg,
             extracts: (main.extracts ?? []).map((e) => ({
                 name: mt(e.name),
+                // английское имя — чтобы узнавать выход в списке выходов английской версии игры
+                nameEn: mtEn(e.name) !== mt(e.name) ? mtEn(e.name) : undefined,
                 faction: e.faction,
                 position: pos(e.position),
                 outline: outline(e.outline),

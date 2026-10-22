@@ -76,3 +76,6 @@ button { font: inherit; color: var(--fg); cursor: pointer; }
 
 /* компактный вид */
 .ov.compact .ov-obj, .ov.compact .ov-who { display: none; }
+
+/* от чего построен маршрут */
+.ov-note { font-size: calc(12px * var(--scale, 1)); color: #e3c96b; line-height: 1.35; }

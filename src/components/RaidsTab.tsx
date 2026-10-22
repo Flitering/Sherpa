@@ -28,6 +28,8 @@ interface Props {
     setRouteMode: (m: "real" | "straight") => void;
     /** Доступные в этом рейде выходы; undefined — все. */
     availableExtracts?: string[];
+    /** Список выходов прочитан со скриншота в текущем рейде. */
+    exitsFromShot?: boolean;
     setAvailableExtracts: (list: string[] | undefined) => void;
     detail?: { stopId: string; route: DetailRoute | null; loading: boolean };
 }
@@ -81,11 +83,17 @@ export default function RaidsTab(p: Props) {
             <div className="exits">
                 <button className="exits-head" onClick={() => setExitsOpen(!exitsOpen)}>
                     <span>Выходы в этом рейде</span>
-                    <small>{avail ? `${exits.filter((e) => avail.has(e.name)).length} из ${exits.length}` : "все"}</small>
+                    <small>
+                        {avail ? `${exits.filter((e) => avail.has(e.name)).length} из ${exits.length}` : "все"}
+                        {p.exitsFromShot && " · со скриншота"}
+                    </small>
                 </button>
                 {exitsOpen && (
                     <>
-                        <p className="hint">Отметь выходы, которые открыты в этом рейде (в игре — клавиша O). Маршрут и выбор рейдов учтут только их.</p>
+                        <p className="hint">
+                            В рейде дважды нажми O и сделай скриншот — Sherpa сама прочитает открытые тебе выходы. Или отметь их здесь вручную. Маршрут и выбор рейдов учтут
+                            только их.
+                        </p>
                         <div className="exit-chips">
                             {exits.map((e) => (
                                 <button key={e.name} className={"chip" + (isOn(e.name) ? " on" : "")} onClick={() => toggleExit(e.name)} title={e.paid ? `Платный: ${p.bundle.items[e.paid.item]?.name ?? ""} ×${e.paid.count}` : undefined}>

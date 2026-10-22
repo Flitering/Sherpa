@@ -170,13 +170,16 @@ export interface RaidOffer {
     startedAt: number;
     defaultRaid: number;
     raids: { index: number; name: string; steps: number; time: string; best: boolean; color: string }[];
+    /** Подсказка: от чего построен маршрут и какие выходы учтены. */
+    note?: string;
 }
 
-export function raidOffer(mapName: string, startedAt: number, raids: Raid[], defaultRaid: number): RaidOffer {
+export function raidOffer(mapName: string, startedAt: number, raids: Raid[], defaultRaid: number, note?: string): RaidOffer {
     return {
         mapName,
         startedAt,
         defaultRaid,
+        note,
         raids: raids.map((r) => ({ index: r.index, name: r.name, steps: r.steps.length, time: fmtMin(r.totalSec), best: !!r.best, color: r.color })),
     };
 }

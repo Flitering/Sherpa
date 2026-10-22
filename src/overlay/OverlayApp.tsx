@@ -125,6 +125,7 @@ function Offer({ offer, act }: { offer: RaidOffer; act: (a: Parameters<NonNullab
             <div className="ov-offer-title">
                 ⚑ <b>{offer.mapName}</b> · {new Date(offer.startedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
             </div>
+            {offer.note && <div className="ov-note">{offer.note}</div>}
             {offer.raids.length ? (
                 <>
                     <span className="ov-muted">Выбери маршрут:</span>

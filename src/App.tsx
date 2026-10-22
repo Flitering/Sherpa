@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import type { Bundle, GameMode, Player, Task, TaskStatus, Vec3 } from "./types";
 import { usePersistentState } from "./lib/store";
 import { activeStops, loadout, objectivePoints, taskOnMap } from "./lib/quests";
-import { DEFAULT_RAID_SETTINGS, planRaids, type Raid, type RaidPlan, type RaidSettings, type RaidStep } from "./lib/raids";
+import { readExtractsFromShot } from "./lib/extractOcr";
+import { DEFAULT_RAID_SETTINGS, planRaids, planWithSpawn, type Raid, type RaidPlan, type RaidSettings, type RaidStep } from "./lib/raids";
 import { refineRaids } from "./lib/realRoutes";
 import { loadSvgText, useNavGrid } from "./lib/useNavGrid";
 import { useSticky } from "./lib/sticky";
@@ -93,6 +94,10 @@ export default function App() {
     /** Время начала рейда (по логу), для которого уже показали предложение. */
     const [promptedRaid, setPromptedRaid] = useSticky<number>("raid.prompted", 0);
     const [raidNote, setRaidNote] = useState<string>();
+    /** Первая позиция в текущем рейде (по скриншоту) — от неё строится маршрут. */
+    const [raidSpawn, setRaidSpawn] = useSticky<{ raid: number; mapKey: string; pos: Vec3; late: boolean } | null>("raid.spawn", null);
+    /** Выходы, прочитанные со скриншота в этом рейде. */
+    const [exitsNote, setExitsNote] = useSticky<{ raid: number; mapKey: string; names: string[] } | null>("raid.exits", null);
     // плавающий виджет: позиция и компактный режим запоминаются
     const [hudPos, setHudPos] = useSticky<{ x: number; y: number } | null>("hud.pos", null);
     const [hudCompact, setHudCompact] = useSticky("hud.compact", false);
@@ -137,11 +142,27 @@ export default function App() {
     );
 
     // ---------- рейды ----------
-    const allowedExtracts = useMemo(() => (availEx[mapKey] ? new Set(availEx[mapKey]) : undefined), [availEx, mapKey]);
+    // выходы: прочитанные со скриншота в текущем рейде, иначе выбранные вручную
+    const exitsRaid = logState?.raidStart;
+    const exitsLive = exitsNote && exitsNote.raid === exitsRaid && exitsNote.mapKey === mapKey && !(logState?.raidEnd && logState.raidEnd > exitsNote.raid) ? exitsNote : null;
+    const allowedExtracts = useMemo(
+        () => (exitsLive ? new Set(exitsLive.names) : availEx[mapKey] ? new Set(availEx[mapKey]) : undefined),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [availEx, mapKey, exitsLive?.raid, exitsLive?.names.join("|")],
+    );
     const stops = useMemo(() => (bundle && gameMap ? activeStops(bundle, state.players, mapKey, includeShoot) : []), [bundle, gameMap, state.players, mapKey, includeShoot]);
+    // рейд по логам (нужен уже здесь: план зависит от точки спавна текущего рейда)
+    const raidStartLog = logState?.raidStart;
+    const raidActive = !!raidStartLog && (!logState?.raidEnd || logState.raidEnd < raidStartLog) && Date.now() - raidStartLog < 75 * 60_000;
+    const spawnHere = raidActive && raidSpawn && raidSpawn.raid === raidStartLog && raidSpawn.mapKey === mapKey ? raidSpawn : null;
     const rawPlan: RaidPlan = useMemo(
-        () => (gameMap ? planRaids(gameMap, stops, raidSettings, extractOverride[mapKey], allowedExtracts) : { raids: [], budgetSec: 0, raidSec: 0 }),
-        [gameMap, stops, raidSettings, extractOverride, mapKey, allowedExtracts],
+        () =>
+            !gameMap
+                ? { raids: [], budgetSec: 0, raidSec: 0 }
+                : spawnHere
+                  ? planWithSpawn(gameMap, stops, raidSettings, spawnHere.pos, extractOverride[mapKey], allowedExtracts)
+                  : planRaids(gameMap, stops, raidSettings, extractOverride[mapKey], allowedExtracts),
+        [gameMap, stops, raidSettings, extractOverride, mapKey, allowedExtracts, spawnHere],
     );
 
     // Реальные пути по сетке проходимости: считаются в фоне, до готовности — прямые линии.
@@ -159,7 +180,12 @@ export default function App() {
             cancelled = true;
         };
     }, [svc, rawPlan, gameMap, raidSettings, extractOverride, mapKey, allowedExtracts]);
-    const plan: RaidPlan = useMemo(() => (svc && refined?.from === rawPlan ? { ...rawPlan, raids: refined.raids } : rawPlan), [svc, refined, rawPlan]);
+    const plan: RaidPlan = useMemo(() => {
+        const p = svc && refined?.from === rawPlan ? { ...rawPlan, raids: refined.raids } : rawPlan;
+        // в рейде с известным спавном рекомендуем рейд «от спавна»
+        if (spawnHere) p.raids.forEach((r) => (r.best = r.index === 0));
+        return p;
+    }, [svc, refined, rawPlan, spawnHere]);
     const routesState =
         routeMode === "straight" ? "straight" : navStatus === "ready" ? (refined?.from === rawPlan || !rawPlan.raids.length ? "real" : "computing") : navStatus;
     const sel = selectedRaid[mapKey] ?? null;
@@ -256,8 +282,13 @@ export default function App() {
 
 
     // ---------- рейд по логам ----------
-    const raidStartLog = logState?.raidStart;
-    const raidActive = !!raidStartLog && (!logState?.raidEnd || logState.raidEnd < raidStartLog) && Date.now() - raidStartLog < 75 * 60_000;
+    const exitsHere = exitsLive;
+    const offerNote = !raidActive
+        ? undefined
+        : spawnHere
+          ? `${spawnHere.late ? "Маршрут от твоей позиции" : "Маршрут от точки спавна"} · ${exitsHere ? `выходы: ${exitsHere.names.join(", ")}` : "учтены все выходы ЧВК — дважды нажми O и сделай скриншот, чтобы оставить только твои"}`
+          : `Сделай скриншот (${screenshotKey}) сразу после спавна — построю маршрут от точки спавна. Если перед этим дважды нажать O, учту только открытые тебе выходы.`;
+    const offerDefault = spawnHere ? 0 : sel ?? plan.raids.find((r) => r.best)?.index ?? 0;
     const showRaidPrompt = !session && raidActive && raidStartLog !== promptedRaid;
     useEffect(() => {
         if (!showRaidPrompt) return;
@@ -348,6 +379,25 @@ export default function App() {
         setLink(w, { status: "off" });
     };
 
+    /** Скриншот в рейде: первый — точка спавна; на картинке может быть список выходов (двойное O). */
+    const onShotRef = useRef<(f: PlayerFix & { file: string }, dir: FileSystemDirectoryHandle) => void>(() => {});
+    onShotRef.current = (f, dir) => {
+        if (!raidActive || !raidStartLog || !gameMap) return;
+        if (!raidSpawn || raidSpawn.raid !== raidStartLog || raidSpawn.mapKey !== mapKey) {
+            // позже 4 минут после начала — это уже не спавн, но строить от текущего места всё равно правильно
+            setRaidSpawn({ raid: raidStartLog, mapKey, pos: f.position, late: Date.now() - raidStartLog > 4 * 60_000 });
+        }
+        const map = gameMap;
+        const raid = raidStartLog;
+        (async () => {
+            const file = await (await dir.getFileHandle(f.file)).getFile();
+            const blob = file instanceof Blob ? file : new Blob([await (file as Blob).arrayBuffer()], { type: "image/png" });
+            const names = await readExtractsFromShot(blob, map);
+            if (!names) return;
+            setExitsNote({ raid, mapKey: map.key, names });
+        })().catch((e) => console.warn("Выходы со скриншота:", e));
+    };
+
     useEffect(() => {
         const h = handles.shots;
         if (!h || links.shots.status !== "on") return;
@@ -356,6 +406,7 @@ export default function App() {
             (f) => {
                 setFix({ ...f, mapKey: mapKeyRef.current });
                 setLastShot(f.file);
+                onShotRef.current(f, h);
             },
             (e) => setLink("shots", { status: "error", name: h.name, error: e.message }),
         );
@@ -602,7 +653,7 @@ export default function App() {
                 hud: computeHud({ map: gameMap, raid: session.raid, timerStart, fix: visibleFix, target, remaining, extract: session.raid.extract, guide, screenshotKey, now: Date.now() }),
             };
         } else if (showRaidPrompt && gameMap && raidStartLog) {
-            m = { kind: "offer", offer: raidOffer(gameMap.name, raidStartLog, plan.raids, sel ?? plan.raids.find((r) => r.best)?.index ?? 0) };
+            m = { kind: "offer", offer: raidOffer(gameMap.name, raidStartLog, plan.raids, offerDefault, offerNote) };
         }
         const key = JSON.stringify(m);
         if (key === lastSent.current) return;
@@ -748,10 +799,12 @@ export default function App() {
                         )}
                         {showRaidPrompt && gameMap && raidStartLog && !(desktop && ovState.open) && (
                             <RaidPrompt
+                                key={spawnHere ? "spawn" : "plain"}
                                 mapName={gameMap.name}
                                 startedAt={raidStartLog}
                                 plan={plan}
-                                defaultRaid={sel ?? plan.raids.find((r) => r.best)?.index ?? 0}
+                                note={offerNote}
+                                defaultRaid={offerDefault}
                                 onStart={(i, overlay) => {
                                     setPromptedRaid(raidStartLog);
                                     startRaid(i);
@@ -824,15 +877,18 @@ export default function App() {
                                     routesState={routesState}
                                     routeMode={routeMode}
                                     setRouteMode={setRouteMode}
-                                    availableExtracts={availEx[mapKey]}
-                                    setAvailableExtracts={(list) =>
+                                    availableExtracts={exitsLive?.names ?? availEx[mapKey]}
+                                    exitsFromShot={!!exitsLive}
+                                    setAvailableExtracts={(list) => {
+                                        // ручной выбор важнее прочитанного со скриншота
+                                        setExitsNote(null);
                                         setAvailEx((all) => {
                                             const next = { ...all };
                                             if (list) next[mapKey] = list;
                                             else delete next[mapKey];
                                             return next;
-                                        })
-                                    }
+                                        });
+                                    }}
                                     detail={planDetail}
                                 />
                             )}

@@ -88,7 +88,7 @@ export function levenshtein(a: string, b: string): number {
 export const similarity = (a: string, b: string) => 1 - levenshtein(a, b) / Math.max(a.length, b.length, 1);
 
 /** Лучшая похожесть name на любой фрагмент строки line с тем же числом слов. */
-function bestInLine(name: string, line: string): number {
+export function bestInLine(name: string, line: string): number {
     if (line.includes(name)) return 1;
     const nw = name.split(" ").length;
     const lw = line.split(" ");

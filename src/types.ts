@@ -113,6 +113,7 @@ export interface MapLabel {
 
 export interface MapPoint {
     name: string;
+    nameEn?: string;
     position: Vec3;
     outline?: Outline;
     faction?: string;
