@@ -1,3 +1,4 @@
+import { dataUrl } from "./desktop";
 import { useEffect, useState } from "react";
 import type { GameMap } from "../types";
 import { buildNavGrid, PathService } from "./navgrid";
@@ -8,7 +9,7 @@ const svgCache = new Map<string, Promise<string>>();
 export function loadSvgText(path: string): Promise<string> {
     let p = svgCache.get(path);
     if (!p) {
-        p = fetch(import.meta.env.BASE_URL + path).then((r) => {
+        p = fetch(dataUrl(path)).then((r) => {
             if (!r.ok) throw new Error(`${r.status}`);
             return r.text();
         });

@@ -29,6 +29,8 @@ interface Props {
     onToggleCompact?: () => void;
     /** Верхняя полоса — ручка для перетаскивания плавающего виджета. */
     onDragStart?: (e: React.PointerEvent) => void;
+    /** Клавиша скриншота, которую игрок назначил в игре. */
+    screenshotKey?: string;
 }
 
 const LOOKAHEAD_M = 20;
@@ -77,7 +79,7 @@ function screenVec(map: GameMap, fix: PlayerFix | undefined, dx: number, dz: num
     return [lng, -lat];
 }
 
-export default function Hud({ map, session, fix, target, remaining, extract, onDone, onSkip, onStop, raidStartFromLog, guide, compact, onToggleCompact, onDragStart }: Props) {
+export default function Hud({ map, session, fix, target, remaining, extract, onDone, onSkip, onStop, raidStartFromLog, guide, compact, onToggleCompact, onDragStart, screenshotKey = "Print Screen" }: Props) {
     const now = useNow();
     const start = raidStartFromLog && raidStartFromLog > session.startedAt - 10 * 60_000 ? raidStartFromLog : session.startedAt;
     const elapsed = (now - start) / 1000;
@@ -170,7 +172,7 @@ export default function Hud({ map, session, fix, target, remaining, extract, onD
                         <span className="hud-noscr">
                             нажми
                             <br />
-                            <b>Print Screen</b>
+                            <b>{screenshotKey}</b>
                         </span>
                     )}
                 </div>
@@ -241,7 +243,7 @@ export default function Hud({ map, session, fix, target, remaining, extract, onD
                 </>
             )}
             <div className="hud-foot">
-                {age === undefined ? "Позиции ещё нет: нажми Print Screen в игре" : `позиция ${age} с назад`}
+                {age === undefined ? `Позиции ещё нет: нажми ${screenshotKey} в игре` : `позиция ${age} с назад`}
             </div>
         </div>
     );

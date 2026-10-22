@@ -7,3 +7,4 @@ public/maps/svg/
 *.log
 .DS_Store
 Thumbs.db
+release/

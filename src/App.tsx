@@ -7,6 +7,10 @@ import { DEFAULT_RAID_SETTINGS, planRaids, type Raid, type RaidPlan, type RaidSe
 import { refineRaids } from "./lib/realRoutes";
 import { loadSvgText, useNavGrid } from "./lib/useNavGrid";
 import { useSticky } from "./lib/sticky";
+import { dataUrl, desktop, desktopDir, type OverlayAction, type OverlayState } from "./lib/desktop";
+import { computeHud, raidOffer, type OverlayModel } from "./lib/hudModel";
+import WindowControls from "./components/TitleBar";
+import { UpdateBadge } from "./components/DesktopPanels";
 import { detailRoute, type DetailRoute } from "./lib/navdetail";
 import { dist as straightDist } from "./lib/route";
 import {
@@ -91,18 +95,23 @@ export default function App() {
     // плавающий виджет: позиция и компактный режим запоминаются
     const [hudPos, setHudPos] = useSticky<{ x: number; y: number } | null>("hud.pos", null);
     const [hudCompact, setHudCompact] = useSticky("hud.compact", false);
+    /** Номер версии данных: растёт после обновления из tarkov.dev — данные перечитываются. */
+    const [dataRev, setDataRev] = useState(0);
+    /** Окно-виджет поверх игры (десктоп). */
+    const [ovState, setOvState] = useState<OverlayState>({ opacity: 0.6, clickThrough: false, open: false });
+    const screenshotKey = state.screenshotKey || "Print Screen";
 
     useEffect(() => {
         setBundle(null);
         setError(null);
-        fetch(`${import.meta.env.BASE_URL}data/${state.mode}.json`)
+        fetch(dataUrl(`data/${state.mode}.json`))
             .then((r) => {
                 if (!r.ok) throw new Error(`Нет файла данных (${r.status}). Запусти «npm run sync».`);
                 return r.json();
             })
             .then(setBundle)
             .catch((e) => setError(e.message));
-    }, [state.mode]);
+    }, [state.mode, dataRev]);
 
     const gameMap = bundle?.maps.find((m) => m.key === state.mapKey) ?? bundle?.maps[0];
     const mapKey = gameMap?.key ?? "";
@@ -114,7 +123,7 @@ export default function App() {
     useEffect(() => {
         setMarket(null);
         loadMarket(state.mode).then(setMarket).catch((e) => console.warn(e));
-    }, [state.mode]);
+    }, [state.mode, dataRev]);
     const marketCtx = useMemo(
         () => ({
             market,
@@ -271,11 +280,35 @@ export default function App() {
         pip?.close();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [logState?.raidEnd]);
+    // десктоп: при начале рейда виджет открывается сам и предлагает маршрут прямо поверх игры
+    useEffect(() => {
+        if (desktop && showRaidPrompt && state.autoOverlay !== false) desktop.overlay.open();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [showRaidPrompt, raidStartLog]);
 
     // ---------- папки игры ----------
     const setLink = (w: Which, l: NavLink) => setLinks((s) => ({ ...s, [w]: l }));
 
+    /** Десктоп: папки игры найдены автоматически (или выбраны вручную) — без запросов разрешений. */
+    const applyDesktopPaths = useCallback((p: { screenshots: string | null; logs: string | null }) => {
+        setHandles({ shots: p.screenshots ? desktopDir(p.screenshots) : undefined, logs: p.logs ? desktopDir(p.logs) : undefined });
+        setLinks({
+            shots: p.screenshots ? { status: "on", name: p.screenshots } : { status: "off", error: "Папка не найдена — сделай скриншот в игре или выбери папку вручную" },
+            logs: p.logs ? { status: "on", name: p.logs } : { status: "off", error: "Игра не найдена — выбери папку Logs вручную" },
+        });
+    }, []);
     useEffect(() => {
+        if (!desktop) return;
+        desktop.paths.get().then(applyDesktopPaths);
+        // клавиша скриншота — из настроек управления игры, если удастся прочитать
+        desktop.paths.screenshotKey().then((k) => k && setState((st) => (st.screenshotKey ? st : { ...st, screenshotKey: k })));
+        desktop.overlay.getState().then(setOvState);
+        const off = desktop.overlay.onState(setOvState);
+        return off;
+    }, [applyDesktopPaths, setState]);
+
+    useEffect(() => {
+        if (desktop) return;
         (["shots", "logs"] as Which[]).forEach(async (w) => {
             const h = await loadHandle(w);
             if (!h) return;
@@ -286,6 +319,10 @@ export default function App() {
     }, []);
 
     const connect = async (w: Which) => {
+        if (desktop) {
+            applyDesktopPaths(await desktop.paths.pick(w));
+            return;
+        }
         try {
             let h = handles[w];
             if (h && links[w].status === "need-permission") {
@@ -301,6 +338,10 @@ export default function App() {
         }
     };
     const disconnect = async (w: Which) => {
+        if (desktop) {
+            applyDesktopPaths(await desktop.paths.reset(w));
+            return;
+        }
         await saveHandle(w, undefined);
         setHandles((s) => ({ ...s, [w]: undefined }));
         setLink(w, { status: "off" });
@@ -391,6 +432,10 @@ export default function App() {
 
     // ---------- окно поверх игры ----------
     const openPip = async () => {
+        if (desktop) {
+            await desktop.overlay.open();
+            return;
+        }
         // Chrome/Edge: окно Picture-in-Picture всегда поверх остальных.
         // Если недоступно — обычное всплывающее окно (закрепить поверх: PowerToys, Win+Ctrl+T).
         let w: Window | null = null;
@@ -539,8 +584,41 @@ export default function App() {
                 guide={guide}
                 compact={hudCompact}
                 onToggleCompact={() => setHudCompact(!hudCompact)}
+                screenshotKey={screenshotKey}
             />
         ) : null;
+
+    // ---------- окно-виджет (десктоп): модель туда, действия оттуда ----------
+    const lastSent = useRef("");
+    useEffect(() => {
+        if (!desktop) return;
+        let m: OverlayModel = { kind: "idle" };
+        if (session && gameMap) {
+            const logStart = logState?.raidStart;
+            const timerStart = logStart && logStart > session.startedAt - 10 * 60_000 ? logStart : session.startedAt;
+            m = {
+                kind: "hud",
+                hud: computeHud({ map: gameMap, raid: session.raid, timerStart, fix: visibleFix, target, remaining, extract: session.raid.extract, guide, screenshotKey, now: Date.now() }),
+            };
+        } else if (showRaidPrompt && gameMap && raidStartLog) {
+            m = { kind: "offer", offer: raidOffer(gameMap.name, raidStartLog, plan.raids, sel ?? plan.raids.find((r) => r.best)?.index ?? 0) };
+        }
+        const key = JSON.stringify(m);
+        if (key === lastSent.current) return;
+        lastSent.current = key;
+        desktop.overlay.update(m);
+    });
+    const actionRef = useRef<(a: OverlayAction) => void>(() => {});
+    actionRef.current = (a) => {
+        if (a.type === "done") markDone();
+        else if (a.type === "skip") skip();
+        else if (a.type === "stop") stopRaid();
+        else if (a.type === "start") {
+            if (raidStartLog) setPromptedRaid(raidStartLog);
+            startRaid(a.raid);
+        } else if (a.type === "dismiss" && raidStartLog) setPromptedRaid(raidStartLog);
+    };
+    useEffect(() => (desktop ? desktop.overlay.onAction((a) => actionRef.current(a)) : undefined), []);
 
     const applyScannedRef = useRef(applyScanned);
     applyScannedRef.current = applyScanned;
@@ -577,7 +655,7 @@ export default function App() {
     return (
         <MarketContext.Provider value={marketCtx}>
         <div className="app">
-            <header className="topbar">
+            <header className={"topbar" + (desktop ? " desktop" : "")}>
                 <div className="brand">
                     <span className="logo">SHERPA</span>
                     <span className="sub">квестовый проводник</span>
@@ -621,9 +699,11 @@ export default function App() {
                     })}
                     {session && <span className="conn-chip on raid">● в рейде</span>}
                 </div>
-                <button className="setup-btn" onClick={() => setShowSetup(true)} title="Первая настройка: папки игры, уведомления, группа">
+                <UpdateBadge />
+                <button className="setup-btn" onClick={() => setShowSetup(true)} title="Первая настройка: папки игры, виджет, группа">
                     ⚙ Настройка
                 </button>
+                <WindowControls />
             </header>
 
             {error && <div className="fatal">{error}</div>}
@@ -659,13 +739,13 @@ export default function App() {
                             <label className="check"><input type="checkbox" checked={showOther} onChange={(e) => setShowOther(e.target.checked)} /> невзятые квесты</label>
                             <label className="check"><input type="checkbox" checked={showHazards} onChange={(e) => setShowHazards(e.target.checked)} /> опасности</label>
                         </div>
-                        {hud && !pip && (
+                        {hud && !pip && !(desktop && ovState.open) && (
                             <div className="hud-float" style={hudPos ? { left: hudPos.x, top: hudPos.y, right: "auto", bottom: "auto" } : undefined}>
                                 {/* ручка перетаскивания — верхняя полоса HUD */}
                                 <div onPointerDown={(e) => (e.target as HTMLElement).closest(".hud-top") && startHudDrag(e)}>{hud}</div>
                             </div>
                         )}
-                        {showRaidPrompt && gameMap && raidStartLog && (
+                        {showRaidPrompt && gameMap && raidStartLog && !(desktop && ovState.open) && (
                             <RaidPrompt
                                 mapName={gameMap.name}
                                 startedAt={raidStartLog}
@@ -781,7 +861,7 @@ export default function App() {
                                         setFollow={setFollow}
                                         autoMap={autoMap}
                                         setAutoMap={setAutoMap}
-                                        pipOpen={!!pip}
+                                        pipOpen={desktop ? ovState.open : !!pip}
                                         openPip={openPip}
                                         pipSupported={true}
                                         sessionActive={!!session}
@@ -791,6 +871,12 @@ export default function App() {
                                         onSyncHistory={syncHistory}
                                         syncNote={syncNote}
                                         historyProgress={historyProgress}
+                                        screenshotKey={state.screenshotKey ?? ""}
+                                        setScreenshotKey={(k) => setState((st) => ({ ...st, screenshotKey: k }))}
+                                        autoOverlay={state.autoOverlay !== false}
+                                        setAutoOverlay={(b) => setState((st) => ({ ...st, autoOverlay: b }))}
+                                        overlay={ovState}
+                                        onDataUpdated={() => setDataRev((n) => n + 1)}
                                     />
                                 </>
                             )}
@@ -816,6 +902,8 @@ export default function App() {
                     onSyncHistory={syncHistory}
                     historyProgress={historyProgress}
                     syncNote={syncNote}
+                    screenshotKey={screenshotKey}
+                    overlayOpen={ovState.open}
                     onClose={() => {
                         setShowSetup(false);
                         setState((s) => ({ ...s, setupDone: true }));

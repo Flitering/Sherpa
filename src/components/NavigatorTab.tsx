@@ -1,6 +1,9 @@
+import { useEffect, useState } from "react";
 import type { PlayerFix } from "../lib/navigator";
 import type { LogState } from "../lib/gamelogs";
 import { fsSupported } from "../lib/navigator";
+import { desktop, type OverlayState } from "../lib/desktop";
+import { AppPanel, PricePanel } from "./DesktopPanels";
 
 export interface NavLink {
     status: "off" | "need-permission" | "on" | "error";
@@ -30,26 +33,47 @@ interface Props {
     onSyncHistory: () => void;
     syncNote?: string;
     historyProgress?: string;
+    screenshotKey: string;
+    setScreenshotKey: (k: string) => void;
+    autoOverlay: boolean;
+    setAutoOverlay: (b: boolean) => void;
+    overlay: OverlayState;
+    onDataUpdated: () => void;
 }
 
-const STATUS = { off: "не подключено", "need-permission": "нужно разрешение", on: "подключено", error: "ошибка" };
+const STATUS = { off: "не найдено", "need-permission": "нужно разрешение", on: "подключено", error: "ошибка" };
+
+const HOTKEYS: [string, string][] = [
+    ["Ctrl+Shift+N", "показать / скрыть виджет"],
+    ["Ctrl+Shift+L", "пропускать клики сквозь виджет в игру (и обратно)"],
+    ["Ctrl+Shift+D", "цель выполнена — к следующей"],
+    ["Ctrl+Shift+S", "пропустить цель"],
+    ["Ctrl+Shift+P", "цена предмета под курсором"],
+];
 
 export default function NavigatorTab(p: Props) {
-    if (!fsSupported()) {
+    if (!desktop && !fsSupported()) {
         return (
             <div className="tab">
-                <p className="empty">Навигатору нужен Chrome или Edge (File System Access API). В этом браузере он недоступен.</p>
+                <p className="empty">В этом браузере навигатор недоступен. Установи приложение Sherpa для Windows — в нём всё работает без настроек браузера.</p>
             </div>
         );
     }
     return (
         <div className="tab">
-            <div className="panel-title"><span>Позиция по скриншотам</span></div>
+            <div className="panel-title">
+                <span>Позиция по скриншотам</span>
+            </div>
             <p className="hint">
-                Выбери папку <code>Документы\Escape From Tarkov\Screenshots</code>. В рейде нажимай клавишу скриншота (по умолчанию <b>Print Screen</b>) — игра запишет координаты и
-                направление взгляда в имя файла, а навигатор покажет тебя на карте.
+                {desktop ? "Папка скриншотов игры находится автоматически. " : "Выбери папку Документы\\Escape From Tarkov\\Screenshots. "}
+                Нажимай в рейде клавишу скриншота — игра запишет координаты и направление взгляда в имя файла, навигатор покажет тебя на карте. Подходит{" "}
+                <b>любая</b> клавиша: приложение следит за новыми файлами, а не за клавиатурой.
             </p>
-            <Link label="Скриншоты" link={p.shots} onConnect={p.connectShots} onOff={() => p.disconnect("shots")} />
+            <Link desktopMode={!!desktop} label="Скриншоты" link={p.shots} onConnect={p.connectShots} onOff={() => p.disconnect("shots")} />
+            <label className="field">
+                Клавиша скриншота в игре (для подсказок)
+                <input value={p.screenshotKey} onChange={(e) => p.setScreenshotKey(e.target.value)} placeholder="Print Screen" />
+            </label>
             {p.fix && (
                 <div className="fix">
                     x {p.fix.position.x.toFixed(1)} · y {p.fix.position.y.toFixed(1)} · z {p.fix.position.z.toFixed(1)}
@@ -57,19 +81,17 @@ export default function NavigatorTab(p: Props) {
                 </div>
             )}
 
-            <div className="panel-title"><span>Карта по логам игры</span></div>
-            <p className="hint">
-                Выбери папку <code>Logs</code> в папке установки игры (например <code>C:\Battlestate Games\Escape from Tarkov\Logs</code>). Навигатор сам переключит карту и
-                засечёт начало рейда.
-            </p>
-            <Link label="Логи" link={p.logs} onConnect={p.connectLogs} onOff={() => p.disconnect("logs")} />
+            <div className="panel-title">
+                <span>Логи игры</span>
+            </div>
+            <p className="hint">Из логов — карта, начало и конец рейда, режим PvP/PvE и взятые/сданные квесты.</p>
+            <Link desktopMode={!!desktop} label="Логи" link={p.logs} onConnect={p.connectLogs} onOff={() => p.disconnect("logs")} />
             {p.log?.mapNameId && (
                 <div className="fix">
                     Последний рейд: <b>{p.log.mapNameId}</b>
                     {p.log.raidStart && ` · начало ${new Date(p.log.raidStart).toLocaleTimeString("ru-RU")}`}
                 </div>
             )}
-
             {p.logs.status === "on" && (
                 <>
                     <label className="check">
@@ -78,50 +100,141 @@ export default function NavigatorTab(p: Props) {
                     <button onClick={p.onSyncHistory} disabled={!!p.historyProgress}>
                         {p.historyProgress ?? "⟳ Загрузить прогресс из всех логов игры"}
                     </button>
-                    <p className="hint">
-                        Игра пишет в логи сообщения «задание получено / выполнено / провалено». Из них приложение ставит статусы, а квесты-предшественники активных отмечает
-                        выполненными. Учитываются события режима, выбранного сверху (PvP/PvE).
-                    </p>
                 </>
             )}
             {p.syncNote && <div className="sync-note">{p.syncNote}</div>}
 
-            <div className="panel-title"><span>Отображение</span></div>
-            <label className="check"><input type="checkbox" checked={p.follow} onChange={(e) => p.setFollow(e.target.checked)} /> Карта следует за игроком</label>
-            <label className="check"><input type="checkbox" checked={p.autoMap} onChange={(e) => p.setAutoMap(e.target.checked)} /> Переключать карту по логам</label>
+            <div className="panel-title">
+                <span>Виджет поверх игры</span>
+            </div>
+            {desktop ? (
+                <>
+                    <p className="hint">
+                        Прозрачное окно поверх игры с навигатором и миникартой. Двигай за верхнюю полосу, меняй размер за края. Игру запускай в режиме <b>«Оконный без рамки»</b>.
+                    </p>
+                    <div className="row">
+                        <button className="primary" onClick={p.openPip} disabled={p.overlay.open}>
+                            {p.overlay.open ? "Виджет открыт" : "Открыть виджет"}
+                        </button>
+                        {p.overlay.open && <button onClick={() => desktop!.overlay.close()}>Скрыть</button>}
+                    </div>
+                    <label className="check">
+                        <input type="checkbox" checked={p.autoOverlay} onChange={(e) => p.setAutoOverlay(e.target.checked)} /> Открывать виджет, когда начинается рейд
+                    </label>
+                    <label className="field">
+                        Прозрачность фона виджета: {Math.round((1 - p.overlay.opacity) * 100)}%
+                        <input type="range" min={0.15} max={0.95} step={0.05} value={p.overlay.opacity} onChange={(e) => desktop!.overlay.set({ opacity: +e.target.value })} />
+                    </label>
+                    <label className="check">
+                        <input type="checkbox" checked={p.overlay.clickThrough} onChange={(e) => desktop!.overlay.set({ clickThrough: e.target.checked })} /> Пропускать клики сквозь виджет в игру
+                    </label>
+                    <table className="hotkeys">
+                        <tbody>
+                            {HOTKEYS.map(([k, t]) => (
+                                <tr key={k}>
+                                    <td>
+                                        <kbd>{k}</kbd>
+                                    </td>
+                                    <td>{t}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </>
+            ) : (
+                <>
+                    <button className="primary wide" disabled={!p.pipSupported || p.pipOpen || !p.sessionActive} onClick={p.openPip}>
+                        {p.pipOpen ? "Окно открыто" : "Открыть окно навигатора"}
+                    </button>
+                    {!p.sessionActive && <p className="hint">Сначала запусти рейд на вкладке «Рейды».</p>}
+                </>
+            )}
 
-            <div className="panel-title"><span>Окно поверх игры</span></div>
-            <p className="hint">
-                Компактный навигатор в отдельном окне, которое всегда поверх остальных. Игру запускай в режиме <b>«Оконный без рамки»</b> — в полноэкранном режиме окна
-                поверх не видны. Можно вынести окно на второй монитор.
-            </p>
-            <button className="primary wide" disabled={!p.pipSupported || p.pipOpen || !p.sessionActive} onClick={p.openPip}>
-                {p.pipOpen ? "Окно открыто" : "Открыть окно навигатора"}
-            </button>
-            {!p.sessionActive && <p className="hint">Сначала запусти рейд на вкладке «Рейды».</p>}
-            <p className="hint">
-                В Chrome/Edge 116+ окно само держится поверх. В других браузерах откроется обычное окно — закрепить его поверх можно через PowerToys (Win+Ctrl+T).
-            </p>
+            <div className="panel-title">
+                <span>Отображение</span>
+            </div>
+            <label className="check">
+                <input type="checkbox" checked={p.follow} onChange={(e) => p.setFollow(e.target.checked)} /> Карта следует за игроком
+            </label>
+            <label className="check">
+                <input type="checkbox" checked={p.autoMap} onChange={(e) => p.setAutoMap(e.target.checked)} /> Переключать карту и PvP/PvE по логам
+            </label>
 
-            <div className="panel-title"><span>Безопасность</span></div>
+            {desktop && <PricePanel />}
+
+            {desktop && <DataPanel onUpdated={p.onDataUpdated} />}
+
+            {desktop && <AppPanel />}
+
+            <div className="panel-title">
+                <span>Безопасность</span>
+            </div>
             <p className="hint">
-                Навигатор только читает имена файлов скриншотов и текст логов, которые игра сама пишет на диск. Он не трогает процесс игры, её память и ввод, не встраивается
-                в игру и ничего не удаляет.
+                Приложение читает только файлы, которые игра сама пишет на диск (имена скриншотов и логи), а для цены по наведению смотрит на экран так же, как запись
+                экрана. Оно не трогает процесс игры, её память и ввод и ничего не удаляет.
             </p>
         </div>
     );
 }
 
-function Link({ label, link, onConnect, onOff }: { label: string; link: NavLink; onConnect: () => void; onOff: () => void }) {
+/** Обновление данных tarkov.dev (квесты, цены, карты) прямо из приложения. */
+function DataPanel({ onUpdated }: { onUpdated: () => void }) {
+    const [info, setInfo] = useState<{ lastSync: number | null; hasUserData: boolean }>();
+    const [busy, setBusy] = useState(false);
+    const [log, setLog] = useState<string[]>([]);
+    useEffect(() => {
+        desktop!.data.info().then(setInfo);
+        return desktop!.data.onProgress((m) => setLog((l) => [...l.slice(-6), m]));
+    }, []);
+    return (
+        <>
+            <div className="panel-title">
+                <span>Данные tarkov.dev</span>
+                <small>{info?.lastSync ? `обновлено ${new Date(info.lastSync).toLocaleString("ru-RU")}` : "встроенные"}</small>
+            </div>
+            <p className="hint">Квесты, цены и карты меняются с патчами игры. Обновление занимает около минуты.</p>
+            <button
+                disabled={busy}
+                onClick={async () => {
+                    setBusy(true);
+                    setLog([]);
+                    try {
+                        await desktop!.data.sync();
+                        setInfo(await desktop!.data.info());
+                        onUpdated();
+                    } catch (e) {
+                        setLog((l) => [...l, "Ошибка: " + (e as Error).message]);
+                    } finally {
+                        setBusy(false);
+                    }
+                }}
+            >
+                {busy ? "⏳ Обновляю…" : "⟳ Обновить данные"}
+            </button>
+            {log.length > 0 && <pre className="raw">{log.join("\n")}</pre>}
+        </>
+    );
+}
+
+function Link({ label, link, onConnect, onOff, desktopMode }: { label: string; link: NavLink; onConnect: () => void; onOff: () => void; desktopMode: boolean }) {
     return (
         <div className={"link-row " + link.status}>
             <span className="led" />
             <div className="link-info">
                 <b>{label}</b>: {STATUS[link.status]}
-                {link.name && <span className="muted"> · {link.name}</span>}
+                {link.name && <div className="muted path">{link.name}</div>}
                 {link.error && <div className="warn">{link.error}</div>}
             </div>
-            {link.status === "on" ? (
+            {desktopMode ? (
+                <div className="row">
+                    <button onClick={onConnect}>Выбрать…</button>
+                    {link.status === "on" && (
+                        <button onClick={onOff} title="Снова искать автоматически">
+                            Авто
+                        </button>
+                    )}
+                </div>
+            ) : link.status === "on" ? (
                 <button onClick={onOff}>Отключить</button>
             ) : (
                 <button className="primary" onClick={onConnect}>

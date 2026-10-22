@@ -4,30 +4,35 @@
 //
 // Запуск: npm run sync          (оба режима)
 //         npm run sync -- pve   (только PvE)
+// Из приложения (Electron): import { syncData } — те же шаги, свои папки и свой fetch.
 //
 // Скрипт только читает публичные данные из интернета. С игрой и её файлами не взаимодействует.
 
 import { mkdir, writeFile, access } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const OUT_DATA = join(ROOT, "public", "data");
-const OUT_SVG = join(ROOT, "public", "maps", "svg");
+/** Настройки текущего запуска: куда писать, чем качать, куда писать журнал. */
+const CFG = {
+    outData: join(ROOT, "public", "data"),
+    outSvg: join(ROOT, "public", "maps", "svg"),
+    forceSvg: false,
+    fetch: (...a) => fetch(...a),
+    log: (m) => console.log(m),
+};
 
 const JSON_BASE = "https://json.tarkov.dev";
 const MAP_CONFIG_URL = "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/src/data/maps.json";
-const SVG_BASE = "https://raw.githubusercontent.com/the-hideout/tarkov-dev-svg-maps/main";
+/** Свежие карты — на assets.tarkov.dev (как на самом сайте); GitHub — запасной вариант. */
+const SVG_BASES = ["https://assets.tarkov.dev/maps/svg", "https://raw.githubusercontent.com/the-hideout/tarkov-dev-svg-maps/main"];
 const LANG = "ru";
 
-const modes = process.argv.slice(2).filter((a) => a === "regular" || a === "pve");
-const MODES = modes.length ? modes : ["regular", "pve"];
-const FORCE_SVG = process.argv.includes("--force-svg");
 
 async function getJson(url) {
     for (let attempt = 1; ; attempt++) {
         try {
-            const res = await fetch(url, { headers: { Accept: "application/json" } });
+            const res = await CFG.fetch(url, { headers: { Accept: "application/json" } });
             if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
             return await res.json();
         } catch (e) {
@@ -38,7 +43,7 @@ async function getJson(url) {
 }
 
 async function getText(url) {
-    const res = await fetch(url);
+    const res = await CFG.fetch(url);
     if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${url}`);
     return res.text();
 }
@@ -109,13 +114,27 @@ async function loadMapConfigs() {
 }
 
 async function downloadSvgs(files) {
-    await mkdir(OUT_SVG, { recursive: true });
+    await mkdir(CFG.outSvg, { recursive: true });
     for (const file of files) {
-        const target = join(OUT_SVG, file);
-        if (!FORCE_SVG && (await exists(target))) continue;
-        process.stdout.write(`  карта ${file}… `);
-        await writeFile(target, await getText(`${SVG_BASE}/${file}`));
-        console.log("ok");
+        const target = join(CFG.outSvg, file);
+        if (!CFG.forceSvg && (await exists(target))) continue;
+        let text = null;
+        let from = "";
+        for (const base of SVG_BASES) {
+            try {
+                const t = await getText(`${base}/${file}`);
+                if (t.includes("<svg")) {
+                    text = t;
+                    from = base.includes("assets") ? "tarkov.dev" : "GitHub";
+                    break;
+                }
+            } catch {
+                /* следующий источник */
+            }
+        }
+        if (!text) throw new Error(`Не удалось скачать карту ${file}`);
+        await writeFile(target, text);
+        CFG.log(`  карта ${file} — ${from}`);
     }
 }
 
@@ -123,7 +142,7 @@ async function downloadSvgs(files) {
 
 async function buildMode(mode, mapConfigs) {
     const get = (name) => getJson(`${JSON_BASE}/${mode}/${name}`);
-    console.log(`[${mode}] скачиваю данные…`);
+    CFG.log(`[${mode}] скачиваю данные…`);
     const [tasks, tasksRu, tasksEn, maps, mapsRu, mapsEn, items, itemsRu, itemsEn, traders, tradersRu, tradersEn] =
         await Promise.all([
             get("tasks"), get(`tasks_${LANG}`), get("tasks_en"),
@@ -310,23 +329,24 @@ async function buildMode(mode, mapConfigs) {
         items: outItems,
         traders: outTraders,
     };
-    await mkdir(OUT_DATA, { recursive: true });
-    const file = join(OUT_DATA, `${mode}.json`);
+    await mkdir(CFG.outData, { recursive: true });
+    const file = join(CFG.outData, `${mode}.json`);
     await writeFile(file, JSON.stringify(bundle));
     // --- цены всех предметов (для подсказок и вкладки «Барахолка») ---
-    const market = buildMarket(items.data, it);
-    await writeFile(join(OUT_DATA, `${mode}-market.json`), JSON.stringify({ mode, generatedAt: new Date().toISOString(), ...market }));
-    console.log(`[${mode}] цены: ${market.items.length} предметов`);
+    const market = buildMarket(items.data, it, translator(itemsEn.data));
+    await writeFile(join(CFG.outData, `${mode}-market.json`), JSON.stringify({ mode, generatedAt: new Date().toISOString(), ...market }));
+    CFG.log(`[${mode}] цены: ${market.items.length} предметов`);
     const withZones = outTasks.filter((t) => t.objectives.some((o) => o.zones || o.locations)).length;
-    console.log(`[${mode}] квестов: ${outTasks.length} (с точками на карте: ${withZones}), карт: ${outMaps.length}, предметов: ${Object.keys(outItems).length}`);
+    CFG.log(`[${mode}] квестов: ${outTasks.length} (с точками на карте: ${withZones}), карт: ${outMaps.length}, предметов: ${Object.keys(outItems).length}`);
 }
 
 /**
  * Компактные цены: [id, имя, короткое, иконка, ширина, высота, базовая цена, последняя низкая,
- * средняя за 24ч, мин 24ч, макс 24ч, изменение за 48ч %, лотов, id торговца, цена торговца ₽, запрещён на барахолке].
+ * средняя за 24ч, мин 24ч, макс 24ч, изменение за 48ч %, лотов, id торговца, цена торговца ₽, запрещён на барахолке,
+ * английское имя, английское короткое] — английские нужны, чтобы узнавать предметы в игре на английском.
  * Формат таблицей, чтобы файл был в разы меньше.
  */
-export function buildMarket(data, tr) {
+export function buildMarket(data, tr, en = tr) {
     const rows = [];
     for (const i of Object.values(data.items)) {
         if (i.types?.includes("preset")) continue;
@@ -337,6 +357,7 @@ export function buildMarket(data, tr) {
             i.lastLowPrice ?? null, i.avg24hPrice ?? null, i.low24hPrice ?? null, i.high24hPrice ?? null,
             i.changeLast48hPercent ?? null, i.lastOfferCount ?? null, best?.trader ?? null, best?.priceRUB ?? null,
             i.types?.includes("noFlea") ? 1 : 0,
+            en(i.name), en(i.shortName),
         ]);
     }
     const fm = data.fleaMarket ?? {};
@@ -346,8 +367,22 @@ export function buildMarket(data, tr) {
     };
 }
 
-const { configs, svgFiles } = await loadMapConfigs();
-console.log(`Конфигурация карт: ${configs.length}`);
-await downloadSvgs(svgFiles);
-for (const mode of MODES) await buildMode(mode, configs);
-console.log("Готово.");
+/**
+ * Скачать и собрать данные.
+ * @param {{ outData?: string, outSvg?: string, modes?: string[], forceSvg?: boolean, fetch?: typeof fetch, log?: (m: string) => void }} opts
+ */
+export async function syncData(opts = {}) {
+    Object.assign(CFG, Object.fromEntries(Object.entries(opts).filter(([, v]) => v !== undefined)));
+    const modes = opts.modes?.length ? opts.modes : ["regular", "pve"];
+    const { configs, svgFiles } = await loadMapConfigs();
+    CFG.log(`Конфигурация карт: ${configs.length}`);
+    await downloadSvgs(svgFiles);
+    for (const mode of modes) await buildMode(mode, configs);
+    CFG.log("Готово.");
+}
+
+// запуск из командной строки: npm run sync [-- pve] [--force-svg]
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    const modes = process.argv.slice(2).filter((a) => a === "regular" || a === "pve");
+    await syncData({ modes, forceSvg: process.argv.includes("--force-svg") });
+}

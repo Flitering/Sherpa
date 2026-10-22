@@ -81,7 +81,7 @@ code { background: #0c0d0b; border: 1px solid var(--line); padding: 0 4px; font-
 main { position: relative; min-width: 0; }
 aside { display: flex; flex-direction: column; min-height: 0; background: linear-gradient(90deg, #0d0e0c, var(--bg1)); border-left: 1px solid var(--line2); }
 .tabs { display: flex; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line2); background: #0c0d0b; }
-.tabs button { flex: 1; justify-content: center; padding: 6px 2px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; background: transparent; border-color: transparent; color: var(--dim); }
+.tabs button { flex: 1 1 auto; justify-content: center; padding: 6px 4px; font-size: 11.5px; white-space: nowrap; text-transform: uppercase; letter-spacing: 0.03em; background: transparent; border-color: transparent; color: var(--dim); }
 .tabs button:hover { color: var(--fg); border-color: var(--line2); }
 .tabs button.on { background: var(--fg); color: var(--bg0); }
 .tab-scroll { flex: 1; overflow: auto; scrollbar-color: var(--line2) transparent; }
@@ -249,7 +249,7 @@ body.pip .radar { width: 190px; height: 190px; }
 .map-label span { display: block; position: absolute; transform-origin: center; white-space: nowrap; translate: -50% -50%; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #e9e3c9b0; text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000; }
 .map-label.big span { font-size: 12px; color: #f2ecd2d0; letter-spacing: 0.14em; }
 
-.stop { position: relative; }
+/* метки — абсолютные маркеры Leaflet; position: relative ломал их положение при зуме */
 .stop span { display: grid; place-items: center; width: 26px; height: 26px; background: #0b0c0a; border: 2px solid var(--rc); border-radius: 2px; color: var(--fg); font-weight: 800; font-size: 11px; box-shadow: 0 1px 4px #000; }
 .stop.shared span { box-shadow: 0 0 0 2px #0b0c0a, 0 0 0 3px var(--fg); }
 .stop em { position: absolute; left: 50%; top: 27px; translate: -50% 0; display: flex; gap: 2px; font-style: normal; }
@@ -301,7 +301,7 @@ path.off-level { stroke-opacity: 0.3; fill-opacity: 0.05; }
 /* подробный маршрут: проёмы и лестницы */
 .detail-line { stroke: var(--hi); stroke-width: 4; fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: 0.95; filter: drop-shadow(0 0 2px #000); }
 .detail-line.other { stroke-width: 2.5; stroke-dasharray: 3 6; opacity: 0.55; }
-.detail-ev { position: relative; }
+
 .detail-ev::after { content: none; }
 .detail-ev { white-space: nowrap; }
 .detail-ev { font-size: 10px; font-weight: 800; letter-spacing: 0.06em; }
@@ -418,3 +418,28 @@ code.copy:hover { border-color: var(--tan); }
 .conn-chip.need-permission .led { background: var(--hi); }
 .conn-chip.error .led { background: var(--red); }
 .conn-chip.raid { color: var(--green); border-color: #4c5f33; cursor: default; }
+
+/* ---------- десктоп: безрамочное окно ---------- */
+html { scrollbar-color: var(--line2) transparent; scrollbar-width: thin; }
+.topbar.desktop { position: relative; padding-top: 0; row-gap: 4px; -webkit-app-region: drag; user-select: none; }
+.topbar.desktop button, .topbar.desktop input, .topbar.desktop select, .topbar.desktop a, .topbar.desktop label { -webkit-app-region: no-drag; }
+.win-controls { position: absolute; top: 0; right: 0; display: flex; height: 34px; -webkit-app-region: no-drag; }
+.win-controls button { width: 46px; height: 100%; justify-content: center; padding: 0; border: none; border-radius: 0; background: transparent; color: var(--dim); }
+.win-controls button:hover { background: #ffffff14; color: var(--fg); }
+.win-controls button.close:hover { background: #b03a2e; color: #fff; }
+.win-controls svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.1; }
+.link-row .row { flex: none; }
+.link-info .path { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.field input { text-transform: none; letter-spacing: 0; }
+.hotkeys { border-collapse: collapse; font-size: 12px; color: var(--dim); }
+.hotkeys td { padding: 3px 8px 3px 0; vertical-align: top; }
+kbd { display: inline-block; font: 11px/1.4 var(--font); padding: 1px 6px; color: var(--fg); background: #0c0d0b; border: 1px solid var(--line2); border-bottom-width: 2px; border-radius: 3px; white-space: nowrap; }
+/* первая строка — логотип, режим, статус, настройка и кнопки окна; вторая — карты */
+.topbar.desktop > * { margin-top: 4px; }
+.topbar.desktop .maps { order: 1; flex-basis: 100%; margin-top: 0; }
+.topbar.desktop .setup-btn { margin-right: 126px; }
+.topbar.desktop .win-controls { margin-top: 0; }
+/* обновление в шапке */
+.upd-badge { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 3px 9px; color: var(--green); border-color: #4c5f33; }
+.upd-badge.ready { background: var(--green); color: #0b0b09; border-color: var(--green); font-weight: 700; }
+.conn + .upd-badge + .setup-btn { margin-left: 0; }

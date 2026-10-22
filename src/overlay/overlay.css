@@ -1,0 +1,78 @@
+/* Виджет поверх игры: прозрачный фон окна, полупрозрачные панели (--alpha), масштаб (--scale). */
+
+:root {
+    --fg: #ece7d2;
+    --dim: #a9a690;
+    --tan: #c9bb8c;
+    --hi: #e3c96b;
+    --green: #8fbf5a;
+    --red: #e0634b;
+    --blue: #7fb9d2;
+    --font: "Bender", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; background: transparent !important; overflow: hidden; }
+body { font: 14px/1.35 var(--font); color: var(--fg); user-select: none; -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: var(--fg); cursor: pointer; }
+
+.ov { height: 100%; display: flex; flex-direction: column; gap: 6px; padding: 4px; font-size: calc(14px * var(--scale)); text-shadow: 0 1px 2px #000, 0 0 4px #000; }
+.ov-panel { background: rgba(9, 10, 8, var(--alpha)); border: 1px solid rgba(201, 187, 140, calc(var(--alpha) * 0.6)); border-radius: 4px; padding: 8px 10px; }
+
+/* шапка — ручка перетаскивания окна */
+.ov-head { -webkit-app-region: drag; display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; background: rgba(9, 10, 8, calc(var(--alpha) + 0.15)); border: 1px solid rgba(201, 187, 140, 0.4); border-radius: 4px; font-size: 13px; }
+.ov-grip { color: var(--dim); }
+.ov-title { flex: 1; min-width: 0; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-timer { font-weight: 800; font-variant-numeric: tabular-nums; }
+.ov-timer small { color: var(--dim); font-weight: 400; }
+.late { color: var(--red) !important; }
+.ov-tools { -webkit-app-region: no-drag; display: flex; gap: 2px; }
+.ov-tools button { background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 3px; padding: 0 5px; min-width: 22px; height: 22px; font-size: 12px; text-shadow: none; }
+.ov-tools button:hover { background: rgba(255, 255, 255, 0.18); }
+.ov-tools button.on { background: var(--hi); color: #0b0b09; }
+/* в «сквозном» режиме — почти невидимые кнопки, видна только ручка */
+.ov.locked .ov-head { opacity: 0.55; }
+
+/* стрелка и дистанция */
+.ov-nav { display: flex; align-items: center; gap: 12px; }
+.ov-arrow { width: calc(84px * var(--scale)); height: calc(84px * var(--scale)); flex: none; display: grid; place-items: center; border-radius: 50%; background: radial-gradient(rgba(30, 32, 26, 0.6), rgba(0, 0, 0, 0.3)); border: 1px solid rgba(201, 187, 140, 0.35); }
+.ov-arrow svg { width: 88%; height: 88%; transition: transform 0.3s; filter: drop-shadow(0 0 3px #000); }
+.ov-arrow path { fill: var(--hi); stroke: #000; stroke-width: 2.5; }
+.ov-arrow.arrived { border-color: var(--green); box-shadow: 0 0 14px rgba(143, 191, 90, 0.5); }
+.ov-here { color: var(--green); font-weight: 800; font-size: 0.85em; }
+.ov-noscr { font-size: 0.72em; text-align: center; color: var(--dim); text-transform: uppercase; }
+.ov-noscr b { color: var(--fg); }
+.ov-dist { min-width: 0; color: var(--dim); }
+.ov-dist b { font-size: 2.4em; color: var(--fg); line-height: 1; }
+.ov-turn { color: var(--hi); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; }
+.ov-floor { color: var(--blue); font-weight: 800; }
+.ov-next { display: inline-block; margin-top: 2px; padding: 0 6px; background: var(--hi); color: #0b0b09; font-weight: 800; text-shadow: none; border-radius: 2px; }
+.ov-muted { color: var(--dim); font-size: 0.85em; }
+
+/* миникарта: растягивается на свободное место */
+.ov-map { flex: 1; min-height: 120px; position: relative; }
+
+.ov-target { display: flex; flex-direction: column; gap: 3px; }
+.ov-step { font-size: 0.78em; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
+.ov-goal { font-weight: 800; font-size: 1.1em; }
+.ov-obj { font-size: 0.92em; }
+.ov-obj b { color: var(--hi); font-size: 0.8em; text-transform: uppercase; }
+.ov-who { font-size: 0.85em; }
+.ov-actions { display: flex; gap: 4px; margin-top: 3px; }
+.ov-actions button { flex: 1; padding: 5px 4px; background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 3px; text-shadow: none; font-size: 0.85em; }
+.ov-actions button:hover { background: rgba(255, 255, 255, 0.16); }
+.ov-actions button.primary { background: var(--hi); color: #0b0b09; font-weight: 800; border-color: var(--hi); }
+.ov-foot { font-size: 0.72em; color: var(--dim); text-align: center; }
+
+/* предложение маршрута */
+.ov-offer, .ov-idle { display: flex; flex-direction: column; gap: 6px; }
+.ov-offer-title { font-size: 1.05em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--hi); }
+.ov-raid { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; text-align: left; padding: 6px 8px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.14); border-left: 3px solid var(--rc); border-radius: 3px; text-shadow: none; }
+.ov-raid:hover { background: rgba(255, 255, 255, 0.14); }
+.ov-raid.def { border-color: var(--rc); }
+.ov-raid-no { grid-row: span 2; align-self: center; width: 24px; height: 24px; display: grid; place-items: center; background: var(--rc); color: #0b0b09; font-weight: 800; border-radius: 2px; }
+.ov-raid-name { font-weight: 800; }
+.ov-raid-name i { color: var(--hi); font-style: normal; }
+.ov-link { align-self: flex-start; background: none; border: none; color: var(--dim); text-decoration: underline; padding: 0; }
+
+/* компактный вид */
+.ov.compact .ov-obj, .ov.compact .ov-who { display: none; }

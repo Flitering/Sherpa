@@ -19,6 +19,10 @@ export interface AppState {
     intelCenter?: boolean;
     /** Мастер первой настройки пройден или закрыт. */
     setupDone?: boolean;
+    /** Клавиша скриншота в игре (для подсказок; приложение ловит сами файлы, клавиша любая). */
+    screenshotKey?: string;
+    /** Десктоп: открывать виджет автоматически, когда начинается рейд. */
+    autoOverlay?: boolean;
 }
 
 const KEY = "sherpa:v1";

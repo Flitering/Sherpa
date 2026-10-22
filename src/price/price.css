@@ -1,0 +1,24 @@
+/* Карточка цены: появляется под подсказкой игры, в клики не вмешивается. */
+html, body { margin: 0; background: transparent; overflow: hidden; }
+body { font: 13px/1.35 "Roboto Condensed", "Arial Narrow", sans-serif; color: #d9d4bf; user-select: none; }
+#root { display: inline-block; }
+.pc {
+    display: inline-flex; flex-direction: column; gap: 3px; min-width: 230px; max-width: 340px;
+    padding: 7px 9px; background: #0b0c0aee; border: 1px solid #43443a; border-left: 3px solid #b8aa7f;
+    box-shadow: 0 4px 14px #000a;
+}
+.pc-head { display: flex; gap: 8px; align-items: center; margin-bottom: 2px; }
+.pc-head img { width: 34px; height: 34px; object-fit: contain; background: #1f201b; border: 1px solid #2c2d27; }
+.pc-head b { display: block; font-size: 13px; line-height: 1.2; }
+.pc-dim { color: #8d8b7d; font-size: 11px; }
+.pc-row { display: flex; justify-content: space-between; gap: 14px; font-size: 13px; }
+.pc-row span { color: #8d8b7d; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; padding-top: 2px; }
+.pc-row b { font-variant-numeric: tabular-nums; }
+.pc-row.best b { color: #e3c96b; }
+.pc-row.best span::after { content: " ★"; color: #e3c96b; }
+.pc-row.slot b { color: #b8aa7f; font-weight: 400; }
+.pc-sub { color: #8d8b7d; font-size: 11px; margin-top: -2px; }
+.pc-quest { font-size: 12px; color: #e3c96b; border-top: 1px solid #2c2d27; padding-top: 3px; }
+.pc-quest i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
+.pc-quest .fir { color: #86a957; font-weight: 700; }
+.pc-miss { color: #8d8b7d; font-size: 12px; min-width: 0; }

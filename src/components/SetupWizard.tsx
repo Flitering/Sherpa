@@ -5,6 +5,7 @@ import { newPlayer } from "../lib/store";
 import type { NavLink } from "./NavigatorTab";
 import type { LogState } from "../lib/gamelogs";
 import { fsSupported } from "../lib/navigator";
+import { desktop } from "../lib/desktop";
 
 interface Props {
     state: AppState;
@@ -17,10 +18,12 @@ interface Props {
     onSyncHistory: () => void;
     historyProgress?: string;
     syncNote?: string;
+    screenshotKey: string;
+    overlayOpen: boolean;
     onClose: () => void;
 }
 
-const STEPS = ["Начало", "Группа", "Скриншоты", "Логи игры", "Окно поверх игры", "Готово"];
+const STEPS = ["Начало", "Группа", "Скриншоты", "Логи игры", desktop ? "Виджет поверх игры" : "Окно поверх игры", "Готово"];
 
 const copy = (t: string) => navigator.clipboard?.writeText(t).catch(() => {});
 
@@ -28,7 +31,7 @@ const copy = (t: string) => navigator.clipboard?.writeText(t).catch(() => {});
 export default function SetupWizard(p: Props) {
     const [step, setStep] = useState(0);
     const [notif, setNotif] = useState(typeof Notification !== "undefined" ? Notification.permission : "denied");
-    const supported = fsSupported();
+    const supported = !!desktop || fsSupported();
     const me = p.state.players.find((x) => x.id === p.state.activePlayer) ?? p.state.players[0];
 
     const next = () => setStep((s) => Math.min(STEPS.length - 1, s + 1));
@@ -62,7 +65,7 @@ export default function SetupWizard(p: Props) {
                                 <b>Безопасно для аккаунта.</b> Приложение не читает память игры, не встраивается в неё и не нажимает клавиши. Оно только читает файлы, которые
                                 игра сама пишет на диск: скриншоты и логи.
                             </div>
-                            {!supported && <div className="wiz-warn">Этот браузер не умеет следить за папками. Открой Sherpa в Chrome или Edge, чтобы работал навигатор.</div>}
+                            {!supported && <div className="wiz-warn">Этот браузер не умеет следить за папками. Установи приложение Sherpa для Windows — в нём навигатор работает в любом случае.</div>}
                         </>
                     )}
 
@@ -117,8 +120,16 @@ export default function SetupWizard(p: Props) {
                             </p>
                             <ol className="wiz-list">
                                 <li>
-                                    В игре проверь клавишу: <i>Настройки → Управление → «Скриншот»</i> (по умолчанию <b>Print Screen</b>).
+                                    В игре проверь клавишу: <i>Настройки → Управление → «Скриншот»</i>. Подойдёт любая — Sherpa следит за новыми файлами, а не за клавиатурой.
+                                    <label className="field">
+                                        Твоя клавиша (для подсказок)
+                                        <input value={p.state.screenshotKey ?? ""} placeholder="Print Screen" onChange={(e) => p.setState((s) => ({ ...s, screenshotKey: e.target.value }))} />
+                                    </label>
                                 </li>
+                                {desktop ? (
+                                    <li>Папка скриншотов находится сама. Если ниже «не найдено» — сделай один скриншот в игре или выбери папку вручную.</li>
+                                ) : (
+                                <>
                                 <li>
                                     Нажми кнопку ниже и выбери папку
                                     <code className="copy" onClick={() => copy("%USERPROFILE%\\Documents\\Escape from Tarkov\\Screenshots")} title="Скопировать">
@@ -127,11 +138,13 @@ export default function SetupWizard(p: Props) {
                                     — путь можно вставить в адресную строку окна выбора. Если папки нет — сделай один скриншот в игре, она появится.
                                 </li>
                                 <li>Браузер спросит разрешение на просмотр файлов — разреши. Доступ только на чтение и только к этой папке.</li>
+                                </>
+                                )}
                             </ol>
                             <LinkRow label="Папка скриншотов" link={p.shots} onConnect={() => p.connect("shots")} />
                             {p.shots.status === "on" && (
                                 <div className="wiz-note">
-                                    Проверка: зайди в игру и нажми Print Screen. {p.lastShot ? <b>Получено: {p.lastShot}</b> : "Пока новых скриншотов нет."}
+                                    Проверка: зайди в игру и нажми {p.screenshotKey}. {p.lastShot ? <b>Получено: {p.lastShot}</b> : "Пока новых скриншотов нет."}
                                 </div>
                             )}
                         </>
@@ -143,6 +156,9 @@ export default function SetupWizard(p: Props) {
                                 <b>Логи игры</b> нужны, чтобы Sherpa сама: узнавала карту и начало рейда (и предлагала открыть навигатор), отмечала взятые и сданные квесты, понимала PvP
                                 или PvE.
                             </p>
+                            {desktop ? (
+                                <p className="hint">Папка логов находится сама по месту установки игры (лаунчер BSG или Steam). Если не нашлась — выбери папку Logs вручную.</p>
+                            ) : (
                             <ol className="wiz-list">
                                 <li>
                                     Выбери папку <b>Logs</b> в папке установки игры. Обычно:
@@ -153,6 +169,7 @@ export default function SetupWizard(p: Props) {
                                 </li>
                                 <li>Разреши браузеру просмотр этой папки.</li>
                             </ol>
+                            )}
                             <LinkRow label="Папка логов" link={p.logs} onConnect={() => p.connect("logs")} />
                             {p.logs.status === "on" && (
                                 <>
@@ -176,7 +193,30 @@ export default function SetupWizard(p: Props) {
                         </>
                     )}
 
-                    {step === 4 && (
+                    {step === 4 && desktop && (
+                        <>
+                            <p>В рейде навигатор с миникартой показывается в прозрачном виджете поверх игры. Двигай его за верхнюю полосу, размер меняй за края.</p>
+                            <ol className="wiz-list">
+                                <li>
+                                    В игре включи <i>Настройки → Графика → Режим экрана: «Оконный без рамки»</i>. В полноэкранном режиме окна поверх игры не видны.
+                                </li>
+                                <li>Когда начнётся рейд, виджет откроется сам и предложит маршрут — выбери рейд прямо в нём.</li>
+                                <li>
+                                    Горячие клавиши: <kbd>Ctrl+Shift+N</kbd> показать/скрыть, <kbd>Ctrl+Shift+L</kbd> пропускать клики в игру, <kbd>Ctrl+Shift+D</kbd> цель выполнена,{" "}
+                                    <kbd>Ctrl+Shift+S</kbd> пропустить.
+                                </li>
+                            </ol>
+                            <label className="check">
+                                <input type="checkbox" checked={p.state.autoOverlay !== false} onChange={(e) => p.setState((s) => ({ ...s, autoOverlay: e.target.checked }))} /> Открывать
+                                виджет при начале рейда
+                            </label>
+                            <div className="row">
+                                <button onClick={() => (p.overlayOpen ? desktop!.overlay.close() : desktop!.overlay.open())}>{p.overlayOpen ? "Скрыть виджет" : "Показать виджет"}</button>
+                            </div>
+                        </>
+                    )}
+
+                    {step === 4 && !desktop && (
                         <>
                             <p>В рейде навигатор показывается в маленьком окне поверх всех окон — его можно двигать и менять размер.</p>
                             <ol className="wiz-list">
@@ -209,7 +249,11 @@ export default function SetupWizard(p: Props) {
                                 <li className={p.state.players.length ? "ok" : ""}>Группа: {p.state.players.map((x) => x.name).join(", ")}</li>
                                 <li className={p.shots.status === "on" ? "ok" : ""}>Скриншоты: {p.shots.status === "on" ? "подключены" : "не подключены — не будет позиции на карте"}</li>
                                 <li className={p.logs.status === "on" ? "ok" : ""}>Логи: {p.logs.status === "on" ? "подключены" : "не подключены — карту и квесты придётся отмечать вручную"}</li>
-                                <li className={notif === "granted" ? "ok" : ""}>Уведомления: {notif === "granted" ? "разрешены" : "выключены"}</li>
+                                {desktop ? (
+                                    <li className={p.state.autoOverlay !== false ? "ok" : ""}>Виджет: {p.state.autoOverlay !== false ? "откроется сам при начале рейда" : "открывается вручную (Ctrl+Shift+N)"}</li>
+                                ) : (
+                                    <li className={notif === "granted" ? "ok" : ""}>Уведомления: {notif === "granted" ? "разрешены" : "выключены"}</li>
+                                )}
                             </ul>
                             <p>Дальше: вкладка «Квесты» — отметь взятые квесты (или распознай их со скриншота списка заданий), затем «Рейды».</p>
                         </>
@@ -243,10 +287,16 @@ function LinkRow({ label, link, onConnect }: { label: string; link: NavLink; onC
                 <b>{label}</b>: {link.status === "on" ? `подключена (${link.name})` : link.status === "need-permission" ? "нужно разрешение" : link.status === "error" ? "ошибка" : "не подключена"}
                 {link.error && <div className="warn">{link.error}</div>}
             </div>
-            {link.status !== "on" && (
-                <button className="primary" onClick={onConnect}>
-                    {link.status === "need-permission" ? "Разрешить" : "Выбрать папку"}
+            {desktop ? (
+                <button className={link.status === "on" ? "" : "primary"} onClick={onConnect}>
+                    {link.status === "on" ? "Изменить…" : "Выбрать папку"}
                 </button>
+            ) : (
+                link.status !== "on" && (
+                    <button className="primary" onClick={onConnect}>
+                        {link.status === "need-permission" ? "Разрешить" : "Выбрать папку"}
+                    </button>
+                )
             )}
         </div>
     );

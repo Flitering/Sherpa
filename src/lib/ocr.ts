@@ -72,7 +72,7 @@ export const normalize = (s: string) =>
         .replace(/[^a-zа-я0-9]+/g, " ")
         .trim();
 
-function levenshtein(a: string, b: string): number {
+export function levenshtein(a: string, b: string): number {
     if (a === b) return 0;
     const m = a.length;
     const n = b.length;
@@ -85,7 +85,7 @@ function levenshtein(a: string, b: string): number {
     return prev[n];
 }
 
-const similarity = (a: string, b: string) => 1 - levenshtein(a, b) / Math.max(a.length, b.length, 1);
+export const similarity = (a: string, b: string) => 1 - levenshtein(a, b) / Math.max(a.length, b.length, 1);
 
 /** Лучшая похожесть name на любой фрагмент строки line с тем же числом слов. */
 function bestInLine(name: string, line: string): number {

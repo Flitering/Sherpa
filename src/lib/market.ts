@@ -1,3 +1,4 @@
+import { dataUrl } from "./desktop";
 // Цены барахолки и торговцев: загрузка, обновление с tarkov.dev, комиссия и рекомендация.
 
 import { createContext, useContext, useSyncExternalStore } from "react";
@@ -20,6 +21,9 @@ export interface MarketItem {
     trader: string | null;
     traderPrice: number | null;
     noFlea: boolean;
+    /** Английские названия (для распознавания в английской версии игры). */
+    en?: string;
+    enShort?: string;
 }
 
 export interface Market {
@@ -32,16 +36,16 @@ export interface Market {
     list: MarketItem[];
 }
 
-type Row = [string, string, string, string | null, number, number, number, number | null, number | null, number | null, number | null, number | null, number | null, string | null, number | null, 0 | 1];
+type Row = [string, string, string, string | null, number, number, number, number | null, number | null, number | null, number | null, number | null, number | null, string | null, number | null, 0 | 1, string?, string?];
 
 export async function loadMarket(mode: GameMode): Promise<Market> {
-    const r = await fetch(`${import.meta.env.BASE_URL}data/${mode}-market.json`);
+    const r = await fetch(dataUrl(`data/${mode}-market.json`));
     if (!r.ok) throw new Error(`Нет файла цен (${r.status}). Запусти «npm run sync».`);
     const j = await r.json();
     const list: MarketItem[] = (j.items as Row[]).map((x) => ({
         id: x[0], name: x[1], short: x[2], icon: x[3] ?? undefined, w: x[4], h: x[5], base: x[6],
         lastLow: x[7], avg24: x[8], low24: x[9], high24: x[10], change48: x[11], offers: x[12],
-        trader: x[13], traderPrice: x[14], noFlea: !!x[15],
+        trader: x[13], traderPrice: x[14], noFlea: !!x[15], en: x[16], enShort: x[17],
     }));
     return {
         mode,
