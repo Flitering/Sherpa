@@ -334,8 +334,14 @@ export class IconIndex<T extends IconItem> {
     private sizes = new Map<string, Promise<void>>();
     private done = new Set<string>();
 
-    /** load бросает ошибку с missing: true, если картинки у предмета нет совсем. */
-    constructor(private load: (id: string) => Promise<ImageData>) {}
+    /**
+     * load бросает ошибку с missing: true, если картинки у предмета нет совсем.
+     * gate — пауза перед каждой картинкой фоновой загрузки (пока идёт распознавание — ждать).
+     */
+    constructor(
+        private load: (id: string) => Promise<ImageData>,
+        private gate: () => Promise<void> = async () => {},
+    ) {}
 
     /** Отпечаток картинки предмета; null — картинки нет. Сбой сети не запоминается: в другой раз попробуем снова. */
     private async sigOf(it: T): Promise<Sig | null> {
@@ -371,7 +377,10 @@ export class IconIndex<T extends IconItem> {
             this.failed = false;
             const work = async () => {
                 // сеть сбоит — остановиться; при следующей встрече с этим размером продолжим
-                while (i < list.length && !this.failed) await this.sigOf(list[i++]);
+                while (i < list.length && !this.failed) {
+                    await this.gate();
+                    await this.sigOf(list[i++]);
+                }
             };
             this.sizes.set(
                 key,

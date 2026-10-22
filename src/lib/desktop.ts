@@ -101,7 +101,7 @@ export interface SherpaApi {
         onPreview(cb: () => void): Unsub;
         onScan(cb: (r: PriceScan) => void): Unsub;
         result(r: PriceResult): void;
-        debug(d: { png: string; text: string; box: unknown; item: string | null; score: number | null }): void;
+        debug(d: { png: string; text: string; ms?: Record<string, number>; box: unknown; item: string | null; score: number | null }): void;
     };
     update: {
         get(): Promise<UpdateState>;

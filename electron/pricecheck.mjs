@@ -76,17 +76,32 @@ export function initPriceCheck(ctx) {
         // защиту от захвата (setContentProtection) не ставим: у прозрачных окон Windows с ней может не рисовать
         // окно вовсе. Карточка стоит под подсказкой и исчезает, когда курсор уходит, — распознаванию не мешает.
         win.loadURL(ctx.pageUrl("price.html"));
-        win.webContents.once("did-finish-load", () => (ready = true));
+        win.webContents.once("did-finish-load", () => {
+            ready = true;
+            park();
+        });
         win.on("closed", () => {
             win = null;
             ready = false;
         });
     }
 
+    /**
+     * «Спрятать» карточку, не скрывая окно: прозрачность 0 и размер 1×1 в углу экрана.
+     * Скрытое окно Chromium притормаживает (таймеры раз в секунду), и первое распознавание после паузы
+     * шло ~1 с вместо ~0,1 с. Невидимое, но показанное окно работает на полной скорости, клики проходят сквозь.
+     */
+    function park() {
+        if (!win) return;
+        const d = screen.getPrimaryDisplay().bounds;
+        win.setOpacity(0);
+        win.setBounds({ x: d.x, y: d.y, width: 1, height: 1 });
+        if (!win.isVisible()) win.showInactive();
+    }
     function hide() {
         clearTimeout(hideTimer);
         shownAt = null;
-        if (win?.isVisible()) win.hide();
+        park();
     }
 
     function show(res, at) {
@@ -102,6 +117,7 @@ export function initPriceCheck(ctx) {
         x = Math.min(Math.max(x, d.x), d.x + d.width - w);
         y = Math.min(Math.max(y, d.y), d.y + d.height - h);
         win.setBounds({ x, y, width: w, height: h });
+        win.setOpacity(1);
         win.showInactive();
         shownAt = { x: at.x, y: at.y };
         clearTimeout(hideTimer);
@@ -201,7 +217,7 @@ export function initPriceCheck(ctx) {
             await fsp.mkdir(debugDir, { recursive: true });
             const stamp = new Date().toISOString().replace(/[:.]/g, "-");
             await fsp.writeFile(path.join(debugDir, `${stamp}.png`), Buffer.from(String(d.png).split(",")[1] ?? "", "base64"));
-            await fsp.writeFile(path.join(debugDir, `${stamp}.json`), JSON.stringify({ text: d.text, box: d.box, item: d.item, score: d.score }, null, 2));
+            await fsp.writeFile(path.join(debugDir, `${stamp}.json`), JSON.stringify({ text: d.text, ms: d.ms, box: d.box, item: d.item, score: d.score }, null, 2));
             // храним последние 40 кадров
             const files = (await fsp.readdir(debugDir)).filter((f) => f.endsWith(".png")).sort();
             for (const f of files.slice(0, Math.max(0, files.length - 40))) {

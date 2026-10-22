@@ -183,6 +183,19 @@ function findTextLines(img: ImageData, s: number): { lines: Box[]; lum: Float32A
     return { lines: merged, lum };
 }
 
+/** Доля светлых точек (букв) в прямоугольнике. */
+function inkShare(lum: Float32Array, W: number, b: Box): number {
+    let ink = 0, n = 0;
+    for (let y = Math.max(0, b.y); y < b.y + b.h; y++)
+        for (let x = Math.max(0, b.x); x < Math.min(W, b.x + b.w); x++) {
+            const v = lum[y * W + x];
+            if (v === undefined) continue;
+            n++;
+            if (v > 105) ink++;
+        }
+    return n ? ink / n : 0;
+}
+
 /**
  * Похоже ли место на подсказку игры: только тёмный ровный фон и светлые буквы, почти без средних тонов.
  * Картинки предметов, рамки клеток и сетка схрона дают много средних тонов.
@@ -247,7 +260,10 @@ function joinRows(lines: Box[], lum: Float32Array, W: number, s: number): Box[] 
             // подписи клеток набраны мельче подсказки
             if (gap > 110 * s || Math.abs(x.h - l.h) > 5 * s) return false;
             const y0 = Math.max(x.y, l.y), y1 = Math.min(x.y + x.h, l.y + l.h);
-            return y1 > y0 && tooltipish(lum, W, { x: x.x + x.w, y: y0, w: gap, h: y1 - y0 });
+            if (y1 <= y0) return false;
+            const g = { x: x.x + x.w, y: y0, w: gap, h: y1 - y0 };
+            // в разрыве подсказки — потерянные буквы (светлые штрихи); между подписями соседних клеток — пустой фон
+            return tooltipish(lum, W, g) && inkShare(lum, W, g) >= 0.04;
         });
         if (!row) {
             rows.push({ ...l });
@@ -328,6 +344,15 @@ let mode: GameMode | null = null;
 let market: Market | null = null;
 let bundle: Bundle | null = null;
 let index: { key: string; item: MarketItem; full: boolean }[] = [];
+/** Тройки букв → номера записей index: быстрый отбор кандидатов перед точным сравнением. */
+let grams = new Map<string, number[]>();
+
+const trigrams = (t: string) => {
+    const out = new Set<string>();
+    const p = ` ${t} `;
+    for (let i = 0; i + 3 <= p.length; i++) out.add(p.slice(i, i + 3));
+    return out;
+};
 
 /** Латиница, похожая на кириллицу, и наоборот — к одному виду: OCR их путает. */
 const SKELETON: Record<string, string> = { a: "а", e: "е", o: "о", p: "р", c: "с", x: "х", y: "у", k: "к", m: "м", t: "т", h: "н", b: "в" };
@@ -341,6 +366,7 @@ async function ensureData() {
     market = await loadMarket(m);
     bundle = await (await fetch(dataUrl(`data/${m}.json`))).json();
     index = [];
+    grams = new Map();
     for (const it of market.list) {
         if (it.name.startsWith("!!!")) continue; // служебные записи tarkov.dev
         for (const [name, full] of [
@@ -359,16 +385,38 @@ async function ensureData() {
 type Hit = { item: MarketItem; score: number };
 
 /** Полные названия, похожие на текст подсказки (строки склеены), — по убыванию похожести. */
+function buildGrams() {
+    grams = new Map();
+    index.forEach((e, i) => {
+        if (!e.full) return;
+        for (const g of trigrams(e.key)) {
+            const list = grams.get(g);
+            if (list) list.push(i);
+            else grams.set(g, [i]);
+        }
+    });
+}
+
 function matchFull(text: string): Hit[] {
     const t = skel(text.replace(/\n+/g, " "));
     if (t.length < 4) return [];
+    if (!grams.size) buildGrams();
+    // отбор: названия, у которых больше всего общих троек букв с прочитанным (доля от длины названия)
+    const common = new Map<number, number>();
+    for (const g of trigrams(t)) for (const i of grams.get(g) ?? []) common.set(i, (common.get(i) ?? 0) + 1);
+    const picked = [...common]
+        .map(([i, n]) => ({ i, k: n / (index[i].key.length + 2) }))
+        .sort((a, b) => b.k - a.k)
+        .slice(0, 250)
+        .map(({ i }) => index[i]);
     const best = new Map<MarketItem, number>();
-    for (const e of index) {
+    for (const e of picked) {
         if (!e.full || e.key.length > t.length + Math.max(4, e.key.length * 0.35)) continue;
         let score = 0;
         if (Math.abs(e.key.length - t.length) <= Math.max(4, e.key.length * 0.35)) score = similarity(e.key, t);
         // внутри более длинного текста (к подсказке прилипли соседние подписи) — только длинные названия, с небольшим штрафом
-        if (e.key.length >= 8 && t.length > e.key.length) score = Math.max(score, bestInLine(e.key, t) - 0.05);
+        // однословные («Ключница») — только целым текстом: такое слово легко найти в ряду подписей клеток
+        if (e.key.length >= 8 && e.key.includes(" ") && t.length > e.key.length) score = Math.max(score, bestInLine(e.key, t) - 0.05);
         if (score > (best.get(e.item) ?? 0)) best.set(e.item, score);
     }
     return [...best].map(([item, score]) => ({ item, score })).sort((a, b) => b.score - a.score);
@@ -450,7 +498,13 @@ async function loadIcon(id: string): Promise<ImageData> {
     return g.getImageData(0, 0, c.width, c.height);
 }
 
-const icons = new IconIndex<MarketItem>(loadIcon);
+/** Идёт распознавание — фоновая загрузка картинок ждёт, чтобы не отнимать у него время. */
+let scanning = false;
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const icons = new IconIndex<MarketItem>(loadIcon, async () => {
+    while (scanning) await pause(60);
+    await pause(15);
+});
 
 // ---------------- прогресс игрока (из общего хранилища приложения) ----------------
 
@@ -531,6 +585,11 @@ desktop!.price.onPreview(async () => {
 });
 
 desktop!.price.onScan(async (req: PriceScan) => {
+    // время этапов — в отладочный кадр (что тормозит)
+    const t0 = performance.now();
+    scanning = true;
+    const ms: Record<string, number> = {};
+    const mark = (k: string) => (ms[k] = Math.round(performance.now() - t0));
     clearTimeout(idleTimer);
     idleTimer = window.setTimeout(stopStream, 90_000); // без сканов захват выключается
     try {
@@ -571,7 +630,9 @@ desktop!.price.onScan(async (req: PriceScan) => {
         const img = g.getImageData(0, 0, area.w, area.h);
         // подсвеченная клетка под курсором — для распознавания по картинке (подход RatScanner)
         const cell = findHoverCell(img, px - area.x, py - area.y, s);
+        mark("кадр");
         const found = findTooltipAndLabel(img, px - area.x, py - area.y, s, cell);
+        mark("поиск");
         const { label, blocks } = found;
         let tooltip = found.tooltip;
         let debugPng = "";
@@ -580,13 +641,18 @@ desktop!.price.onScan(async (req: PriceScan) => {
         let labelText = "";
         let used: Box | null = null;
         const w = await getWorker();
-        const scale = Math.max(2.5, 3 / s);
+        const scale = Math.max(2, 2 / s);
         let full: Hit[] = [];
         // спорные случаи (курсор и картинка разошлись, рядом другой тёмный блок с текстом):
         // читаем до трёх кандидатов и оставляем тот, что совпал с названием предмета
         for (const t of found.tips) {
+            const ta = performance.now();
             await w.setParameters({ tessedit_pageseg_mode: (t.lines > 1 ? "6" : "7") as never });
-            const tt = (await w.recognize(toOcrCanvas(c, t, scale))).data.text;
+            ms["параметры"] = Math.round(performance.now() - ta);
+            const cv = toOcrCanvas(c, t, scale);
+            ms["картинка для чтения"] = Math.round(performance.now() - ta);
+            const tt = (await w.recognize(cv)).data.text;
+            ms[`чтение ${Object.keys(ms).filter((k) => k.startsWith("чтение")).length + 1} (${t.w}×${t.h})`] = Math.round(performance.now() - ta);
             const ff = matchFull(tt);
             if (!full.length || (ff[0]?.score ?? 0) > (full[0]?.score ?? 0)) {
                 full = ff;
@@ -596,6 +662,7 @@ desktop!.price.onScan(async (req: PriceScan) => {
             }
             if ((full[0]?.score ?? 0) >= 0.9) break;
         }
+        mark("подсказка");
         // подпись клетки: проверка, если подсказка прочиталась неуверенно (или её нет, но есть клетка под курсором
         // или нажата горячая клавиша)
         let short = new Set<MarketItem>();
@@ -604,6 +671,7 @@ desktop!.price.onScan(async (req: PriceScan) => {
             labelText = (await w.recognize(toOcrCanvas(c, label, scale))).data.text;
             short = matchShort(labelText);
         }
+        mark("подпись");
         // картинка клетки: сравнение с картинками предметов того же размера
         let icon: IconView | null = null;
         if (cell && (full[0]?.score ?? 0) < 0.86) {
@@ -617,6 +685,7 @@ desktop!.price.onScan(async (req: PriceScan) => {
             const complete = icons.prepareSize(sized, cell.cw, cell.ch);
             icon = { sized: sizedSet, hits: icons.rank(sig, sized), complete };
         }
+        mark("картинка");
         const m = decide(full, short, icon);
         if (m && !used) used = cell ?? label;
         const iconText = icon ? icon.hits.slice(0, 3).map((h) => `${h.item.short} ${h.score.toFixed(2)}`).join(", ") + (icon.complete ? "" : " (не все)") : "";
@@ -637,7 +706,7 @@ desktop!.price.onScan(async (req: PriceScan) => {
             dg.fillRect(px - area.x - 2, py - area.y - 2, 5, 5);
             debugPng = dc.toDataURL("image/png");
         }
-        if (req.debug) desktop!.price.debug({ png: debugPng, text, box: { tooltip, label, cell, blocks: blocks.map((b) => [b.x, b.y, b.w, b.h, b.lines]) }, item: m?.item.name ?? null, score: m?.score ?? null });
+        if (req.debug) desktop!.price.debug({ png: debugPng, text, ms, box: { tooltip, label, cell, blocks: blocks.map((b) => [b.x, b.y, b.w, b.h, b.lines]) }, item: m?.item.name ?? null, score: m?.score ?? null });
         if (!m && !req.manual) {
             desktop!.price.result({ found: false, tooltip: !!box, width: 0, height: 0 });
             return;
@@ -653,6 +722,8 @@ desktop!.price.onScan(async (req: PriceScan) => {
         desktop!.price.result({ found: !!m, tooltip: !!box, width: Math.ceil(card.offsetWidth), height: Math.ceil(card.offsetHeight), tip, name: m?.item.name });
     } catch (e) {
         desktop!.price.result({ found: false, tooltip: false, width: 0, height: 0, error: String((e as Error)?.message ?? e) });
+    } finally {
+        scanning = false;
     }
 });
 

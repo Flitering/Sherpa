@@ -41,6 +41,14 @@ const SETTINGS_FILE = path.join(USER, "settings.json");
 
 app.setAppUserModelId("app.sherpa.tarkov");
 
+// окно цены почти всё время скрыто, а Chromium понижает приоритет скрытых окон и их потоков — тогда первое
+// распознавание после паузы шло ~0,9 с вместо ~0,1 с (особенно пока игра занимает процессор)
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+// Windows 11 переводит фоновые процессы Chromium в «режим эффективности» (EcoQoS: медленные ядра, низкая частота)
+app.commandLine.appendSwitch("disable-features", "UseEcoQoSForBackgroundProcess,IntensiveWakeUpThrottling,CalculateNativeWinOcclusion");
+
 // одна копия приложения: повторный запуск просто показывает окно
 if (!app.requestSingleInstanceLock()) {
     app.quit();
