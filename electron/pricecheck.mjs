@@ -8,7 +8,7 @@
 // Сканирование включается, только пока запущена игра (по списку процессов Windows), если не выбрано иное.
 
 import { app, BrowserWindow, desktopCapturer, screen, session, shell } from "electron";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
@@ -38,11 +38,14 @@ export function initPriceCheck(ctx) {
     let targetDisplay = null;
     let lastName;
 
-    const active = () => st().enabled && (!st().onlyWithGame || gameRunning);
+    // активное окно (кто сейчас на переднем плане): сканируем, только когда это игра
+    let foreground = "";
+    let fgProc = null;
+    const active = () => st().enabled && (!st().onlyWithGame || (gameRunning && (fgProc ? /^EscapeFromTarkov$/i.test(foreground) : true)));
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
     function state() {
-        return { ...st(), gameRunning, last: lastName };
+        return { ...st(), gameRunning, foreground, last: lastName };
     }
     function sendState() {
         ctx.mainWin()?.webContents.send("price:state", state());
@@ -70,8 +73,8 @@ export function initPriceCheck(ctx) {
         });
         win.setAlwaysOnTop(true, "screen-saver");
         win.setIgnoreMouseEvents(true);
-        // карточка не попадает в захват экрана — иначе распознавание читало бы её саму
-        win.setContentProtection(true);
+        // защиту от захвата (setContentProtection) не ставим: у прозрачных окон Windows с ней может не рисовать
+        // окно вовсе. Карточка стоит под подсказкой и исчезает, когда курсор уходит, — распознаванию не мешает.
         win.loadURL(ctx.pageUrl("price.html"));
         win.webContents.once("did-finish-load", () => (ready = true));
         win.on("closed", () => {
@@ -137,7 +140,9 @@ export function initPriceCheck(ctx) {
         return true;
     }
 
+    let previewUntil = 0;
     function tick() {
+        if (Date.now() < previewUntil) return; // пробная карточка видна 5 секунд при любом окне
         if (!active()) return hide();
         const p = screen.getCursorScreenPoint();
         const now = Date.now();
@@ -170,6 +175,15 @@ export function initPriceCheck(ctx) {
         const at = { x: scan.x, y: scan.y };
         const manual = scan.manual;
         scan.busy = false;
+        if (scan.preview) {
+            // пробная карточка: 5 секунд, курсор может уходить
+            show({ ...res, tip: { x: at.x - res.width / 2, y: at.y - res.height / 2, w: 0, h: 0 } }, at);
+            shownAt = null;
+            previewUntil = Date.now() + 5000;
+            clearTimeout(hideTimer);
+            hideTimer = setTimeout(hide, 5000);
+            return;
+        }
         if (res.found) {
             scan.tries = MAX_TRIES; // нашли — по этой точке больше не сканируем
             lastName = res.name;
@@ -221,6 +235,41 @@ export function initPriceCheck(ctx) {
 
     // ---------------- запущена ли игра ----------------
 
+    /**
+     * Какая программа на переднем плане — стандартный вызов Windows GetForegroundWindow из PowerShell,
+     * раз в полсекунды. С игрой это никак не взаимодействует. Если не удалось — проверка только по процессу.
+     */
+    function startForeground() {
+        if (fgProc || process.platform !== "win32") return;
+        const script = [
+            "$ErrorActionPreference='SilentlyContinue'",
+            "Add-Type -Namespace Sherpa -Name Fg -MemberDefinition '[DllImport(\"user32.dll\")] public static extern System.IntPtr GetForegroundWindow(); [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint p);'",
+            "while ($true) { $p = 0; [void][Sherpa.Fg]::GetWindowThreadProcessId([Sherpa.Fg]::GetForegroundWindow(), [ref]$p); $n = (Get-Process -Id $p).ProcessName; [Console]::Out.WriteLine($n); [Console]::Out.Flush(); Start-Sleep -Milliseconds 500 }",
+        ].join("; ");
+        try {
+            fgProc = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+        } catch {
+            fgProc = null;
+            return;
+        }
+        let buf = "";
+        fgProc.stdout.on("data", (d) => {
+            buf += d.toString();
+            const lines = buf.split(/\r?\n/);
+            buf = lines.pop() ?? "";
+            if (lines.length) foreground = lines[lines.length - 1].trim();
+        });
+        fgProc.on("exit", () => {
+            fgProc = null;
+            foreground = "";
+        });
+    }
+    function stopForeground() {
+        fgProc?.kill();
+        fgProc = null;
+        foreground = "";
+    }
+
     function checkGame() {
         execFile("tasklist", ["/FI", "IMAGENAME eq EscapeFromTarkov.exe", "/NH", "/FO", "CSV"], { windowsHide: true }, (err, out) => {
             const run = !err && /EscapeFromTarkov\.exe/i.test(out);
@@ -242,10 +291,13 @@ export function initPriceCheck(ctx) {
                 checkGame();
                 gameTimer = setInterval(checkGame, 8000);
             }
+            if (st().onlyWithGame) startForeground();
+            else stopForeground();
         } else {
             clearInterval(timer);
             clearInterval(gameTimer);
             timer = gameTimer = null;
+            stopForeground();
             hide();
             win?.destroy();
         }
@@ -259,12 +311,31 @@ export function initPriceCheck(ctx) {
         apply();
         return state();
     });
+    // пробная карточка в середине экрана под курсором — убедиться, что она видна поверх игры
+    ctx.handle("price:showTest", ["main"], async () => {
+        if (!st().enabled) {
+            st().enabled = true;
+            ctx.saveSettings();
+            apply();
+        }
+        await new Promise((res) => {
+            const go = () => (ready ? res() : setTimeout(go, 200));
+            go();
+        });
+        const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+        const c = { x: Math.round(d.x + d.width / 2), y: Math.round(d.y + d.height / 2) };
+        scan = { x: c.x, y: c.y, t: Date.now(), tries: MAX_TRIES, busy: true, manual: true, preview: true };
+        win.webContents.send("price:preview");
+    });
     ctx.handle("price:openDebug", ["main"], async () => {
         await fsp.mkdir(debugDir, { recursive: true });
         shell.openPath(debugDir);
     });
 
-    app.on("will-quit", () => win?.destroy());
+    app.on("will-quit", () => {
+        win?.destroy();
+        stopForeground();
+    });
     apply();
 
     return {

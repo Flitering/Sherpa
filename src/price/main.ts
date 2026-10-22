@@ -73,7 +73,7 @@ interface Box {
  * неровные области и в буквы не попадают), потом буквы одной высоты, стоящие рядом, — в строки.
  * Вокруг строки фон должен быть тёмным и однотонным.
  */
-function findTextLines(img: ImageData, s: number): Box[] {
+function findTextLines(img: ImageData, s: number): { lines: Box[]; lum: Float32Array } {
     const { width: W, height: H, data: d } = img;
     const N = W * H;
     const lum = new Float32Array(N);
@@ -180,11 +180,28 @@ function findTextLines(img: ImageData, s: number): Box[] {
             m.h = y1 - y0;
         } else merged.push({ ...b });
     }
-    return merged;
+    return { lines: merged, lum };
+}
+
+/**
+ * Похоже ли место на подсказку игры: только тёмный ровный фон и светлые буквы, почти без средних тонов.
+ * Картинки предметов, рамки клеток и сетка схрона дают много средних тонов.
+ */
+function tooltipish(lum: Float32Array, W: number, b: Box): boolean {
+    let dark = 0, mid = 0, n = 0;
+    for (let y = Math.max(0, b.y); y < b.y + b.h; y++)
+        for (let x = Math.max(0, b.x); x < Math.min(W, b.x + b.w); x++) {
+            const v = lum[y * W + x];
+            if (v === undefined) continue;
+            n++;
+            if (v < 55) dark++;
+            else if (v < 105) mid++;
+        }
+    return n > 0 && mid / n <= 0.2 && dark / n >= 0.45;
 }
 
 /** Строки одна под другой с одним левым краем — одна плашка: длинное название в подсказке переносится. */
-function groupBlocks(lines: Box[], s: number): (Box & { lines: number })[] {
+function groupBlocks(lines: Box[], s: number, lum?: Float32Array, W = 0): (Box & { lines: number })[] {
     const sorted = [...lines].sort((p, q) => p.y - q.y);
     const used = new Set<Box>();
     const blocks: (Box & { lines: number })[] = [];
@@ -195,10 +212,12 @@ function groupBlocks(lines: Box[], s: number): (Box & { lines: number })[] {
         let last = l;
         for (const n of sorted) {
             if (used.has(n) || n.y <= last.y) continue;
-            if (n.y - (last.y + last.h) > 7 * s || Math.abs(n.x - blk.x) > 7 * s) continue;
-            used.add(n);
+            if (n.y - (last.y + last.h) > 8 * s || Math.abs(n.x - blk.x) > 30 * s) continue;
             const x2 = Math.max(blk.x + blk.w, n.x + n.w);
             const y2 = n.y + n.h;
+            // строки одной подсказки лежат на одном тёмном фоне: случайные «строки» из картинок не приклеиваем
+            if (lum && !tooltipish(lum, W, { x: Math.min(blk.x, n.x), y: blk.y, w: x2 - Math.min(blk.x, n.x), h: y2 - blk.y })) continue;
+            used.add(n);
             blk.x = Math.min(blk.x, n.x);
             blk.w = x2 - blk.x;
             blk.h = y2 - blk.y;
@@ -213,56 +232,77 @@ function groupBlocks(lines: Box[], s: number): (Box & { lines: number })[] {
 const distTo = (b: Box, cx: number, cy: number) => Math.hypot(Math.max(b.x - cx, 0, cx - b.x - b.w), Math.max(b.y - cy, 0, cy - b.y - b.h));
 
 /**
- * Подсказка игры: кусок текста у курсора — зацепка; вокруг него собираются все куски той же строки
- * и соседних строк (буквы поверх картинок предметов находятся не все, длинное название переносится).
+ * Куски одной строки (буквы поверх картинок находятся не все) — в одну строку: рядом стоящие всегда,
+ * далёкие — только если между ними фон подсказки, а не картинки и рамки соседних клеток.
+ */
+function joinRows(lines: Box[], lum: Float32Array, W: number, s: number): Box[] {
+    const sorted = [...lines].sort((p, q) => p.x - q.x);
+    const rows: Box[] = [];
+    for (const l of sorted) {
+        const row = rows.find((x) => {
+            if (Math.abs(x.y + x.h / 2 - (l.y + l.h / 2)) > 5 * s || l.x < x.x) return false;
+            const gap = l.x - (x.x + x.w);
+            if (gap <= 14 * s) return true;
+            // широкий разрыв (буквы поверх картинки не нашлись) — только между кусками одного шрифта:
+            // подписи клеток набраны мельче подсказки
+            if (gap > 110 * s || Math.abs(x.h - l.h) > 5 * s) return false;
+            const y0 = Math.max(x.y, l.y), y1 = Math.min(x.y + x.h, l.y + l.h);
+            return y1 > y0 && tooltipish(lum, W, { x: x.x + x.w, y: y0, w: gap, h: y1 - y0 });
+        });
+        if (!row) {
+            rows.push({ ...l });
+            continue;
+        }
+        const x2 = Math.max(row.x + row.w, l.x + l.w);
+        const y0 = Math.min(row.y, l.y), y1 = Math.max(row.y + row.h, l.y + l.h);
+        row.w = x2 - row.x;
+        row.y = y0;
+        row.h = y1 - y0;
+    }
+    return rows;
+}
+
+/**
+ * Подсказка игры — самый длинный текст рядом с курсором: полное название, иногда в несколько строк.
+ * Подписи клеток короткие («20/20», «417 7.62»), поэтому выбирается по ширине, а не по близости:
+ * так подсказка находится, даже если точка курсора и картинка разошлись на несколько десятков пикселей.
  * Подпись клетки — короткое имя в правом верхнем углу предмета под курсором: выше курсора и правее него.
  */
 function findTooltipAndLabel(img: ImageData, cx: number, cy: number, s: number, cell: Box | null) {
-    const lines = findTextLines(img, s);
-    const blocks = groupBlocks(lines, s);
-    const near = lines.filter((l) => distTo(l, cx, cy) <= 40 * s).sort((p, q) => distTo(p, cx, cy) - distTo(q, cx, cy));
-    let tooltip: (Box & { lines: number }) | null = null;
-    const cluster = new Set<Box>();
-    if (near.length) {
-        const seed = near[0];
-        const xL = seed.x - 380 * s, xR = seed.x + seed.w + 480 * s;
-        cluster.add(seed);
-        for (let grown = true; grown; ) {
-            grown = false;
-            for (const l of lines) {
-                if (cluster.has(l) || l.x + l.w < xL || l.x > xR) continue;
-                const touches = [...cluster].some((c) => l.y < c.y + c.h + 6 * s && l.y + l.h > c.y - 6 * s);
-                if (!touches) continue;
-                cluster.add(l);
-                grown = true;
-            }
-        }
-        const list = [...cluster];
-        const x0 = Math.min(...list.map((l) => l.x)), y0 = Math.min(...list.map((l) => l.y));
-        const x1 = Math.max(...list.map((l) => l.x + l.w)), y1 = Math.max(...list.map((l) => l.y + l.h));
-        // строки: куски с близкими серединами
-        const mids = list.map((l) => l.y + l.h / 2).sort((p, q) => p - q);
-        let rows = 1;
-        for (let i = 1; i < mids.length; i++) if (mids[i] - mids[i - 1] > 8 * s) rows++;
-        const W = img.width, H = img.height;
-        const pad = Math.round(10 * s);
-        tooltip = { x: Math.max(0, x0 - pad), y: Math.max(0, y0 - 2), w: Math.min(W, x1 + pad) - Math.max(0, x0 - pad), h: Math.min(H, y1 + 2) - Math.max(0, y0 - 2), lines: rows };
-        if (tooltip.w < 40 * s || rows > 4) tooltip = null;
-    }
+    const { lines, lum } = findTextLines(img, s);
+    const blocks = groupBlocks(joinRows(lines, lum, img.width, s), s, lum, img.width);
+    const W = img.width, H = img.height, pad = Math.round(8 * s);
+    const tips = blocks
+        .map((b) => ({ b, d: distTo(b, cx, cy) }))
+        .filter(({ b, d }) => d <= 120 * s && b.w >= 60 * s && b.lines <= 4 && tooltipish(lum, W, b))
+        // ширина важна до определённого предела, дальше решает близость к курсору
+        .map(({ b, d }) => ({ b, score: Math.min(b.w, 200 * s) + 40 * s * (b.lines - 1) - 3 * d }))
+        .sort((p, q) => q.score - p.score)
+        .slice(0, 3)
+        .map(({ b }) => {
+            // немного полей: крайние буквы могли не попасть в куски
+            const x0 = Math.max(0, b.x - pad), x1 = Math.min(W, b.x + b.w + pad);
+            return { x: x0, y: Math.max(0, b.y - 2), w: x1 - x0, h: Math.min(H, b.y + b.h + 2) - Math.max(0, b.y - 2), lines: b.lines };
+        });
+    const tooltip = tips[0] ?? null;
+    const inTip = (b: Box) => !!tooltip && b.x >= tooltip.x - 2 && b.x + b.w <= tooltip.x + tooltip.w + 2 && b.y >= tooltip.y - 2 && b.y + b.h <= tooltip.y + tooltip.h + 2;
     const labels = lines.filter(
-        (b) => !cluster.has(b) && b.w <= 160 * s && b.y + b.h <= cy + 8 * s && b.x + b.w >= cx - 8 * s && cy - b.y <= 260 * s && b.x + b.w - cx <= 260 * s,
+        (b) => !inTip(b) && b.w <= 160 * s && b.y + b.h <= cy + 8 * s && b.x + b.w >= cx - 8 * s && cy - b.y <= 260 * s && b.x + b.w - cx <= 260 * s,
     );
     labels.sort((p, q) => cy - p.y + 0.5 * (p.x + p.w - cx) - (cy - q.y + 0.5 * (q.x + q.w - cx)));
     // известна клетка под курсором — подпись именно её: короткое имя в верхней полосе клетки. На подсвеченном
     // фоне строки выше не находятся (там нужен тёмный фон), но место подписи известно и так
     if (cell) {
         const pad = Math.round(2 * s);
-        return { tooltip, label: { x: cell.x + pad, y: cell.y + Math.round(s), w: cell.w - 2 * pad, h: Math.round(15 * s) }, blocks };
+        return { tooltip, tips, label: { x: cell.x + pad, y: cell.y + Math.round(s), w: cell.w - 2 * pad, h: Math.round(15 * s) }, blocks };
     }
-    return { tooltip, label: labels[0] ?? null, blocks };
+    return { tooltip, tips, label: labels[0] ?? null, blocks };
 }
 
-/** Светлый текст на тёмном → чёрный текст на белом, крупнее: так Tesseract читает надёжнее. */
+/**
+ * Светлый текст на тёмном → тёмный на светлом, крупнее. Без перевода в чёрно-белое: тонкий шрифт игры
+ * после жёсткого порога рвётся на куски, а в оттенках серого Tesseract читает его без ошибок.
+ */
 function toOcrCanvas(src: CanvasImageSource, box: Box, scale: number): HTMLCanvasElement {
     const c = document.createElement("canvas");
     c.width = Math.round(box.w * scale);
@@ -273,8 +313,10 @@ function toOcrCanvas(src: CanvasImageSource, box: Box, scale: number): HTMLCanva
     const img = g.getImageData(0, 0, c.width, c.height);
     const d = img.data;
     for (let i = 0; i < d.length; i += 4) {
-        const v = 0.3 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2] > 120 ? 0 : 255;
-        d[i] = d[i + 1] = d[i + 2] = v;
+        const v = 0.3 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2];
+        // инверсия с растяжкой контраста: фон подсказки (~20–60) → белый, буквы (~130+) → чёрные
+        const t = 255 - Math.min(255, Math.max(0, ((v - 50) * 255) / 130));
+        d[i] = d[i + 1] = d[i + 2] = t;
     }
     g.putImageData(img, 0, 0);
     return c;
@@ -474,6 +516,20 @@ function renderMiss() {
 
 // ---------------- обработка запроса ----------------
 
+// пробная карточка: дорогой известный предмет, чтобы было видно, как выглядит и где появляется
+desktop!.price.onPreview(async () => {
+    try {
+        await ensureData();
+        const item = market!.list.find((it) => it.name === "Видеокарта") ?? market!.list.find((it) => (it.lastLow ?? 0) > 100_000) ?? market!.list[0];
+        render(item);
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
+        const card = root.firstElementChild as HTMLElement;
+        desktop!.price.result({ found: true, tooltip: false, width: Math.ceil(card.offsetWidth), height: Math.ceil(card.offsetHeight), name: item.name });
+    } catch (e) {
+        desktop!.price.result({ found: false, tooltip: false, width: 0, height: 0, error: String((e as Error)?.message ?? e) });
+    }
+});
+
 desktop!.price.onScan(async (req: PriceScan) => {
     clearTimeout(idleTimer);
     idleTimer = window.setTimeout(stopStream, 90_000); // без сканов захват выключается
@@ -515,20 +571,30 @@ desktop!.price.onScan(async (req: PriceScan) => {
         const img = g.getImageData(0, 0, area.w, area.h);
         // подсвеченная клетка под курсором — для распознавания по картинке (подход RatScanner)
         const cell = findHoverCell(img, px - area.x, py - area.y, s);
-        const { tooltip, label, blocks } = findTooltipAndLabel(img, px - area.x, py - area.y, s, cell);
+        const found = findTooltipAndLabel(img, px - area.x, py - area.y, s, cell);
+        const { label, blocks } = found;
+        let tooltip = found.tooltip;
         let debugPng = "";
         const box = tooltip;
         let text = "";
         let labelText = "";
         let used: Box | null = null;
         const w = await getWorker();
-        const scale = Math.max(1.5, 2.2 / s);
+        const scale = Math.max(2.5, 3 / s);
         let full: Hit[] = [];
-        if (tooltip) {
-            await w.setParameters({ tessedit_pageseg_mode: (tooltip.lines > 1 ? "6" : "7") as never });
-            text = (await w.recognize(toOcrCanvas(c, tooltip, scale))).data.text;
-            full = matchFull(text);
-            used = tooltip;
+        // спорные случаи (курсор и картинка разошлись, рядом другой тёмный блок с текстом):
+        // читаем до трёх кандидатов и оставляем тот, что совпал с названием предмета
+        for (const t of found.tips) {
+            await w.setParameters({ tessedit_pageseg_mode: (t.lines > 1 ? "6" : "7") as never });
+            const tt = (await w.recognize(toOcrCanvas(c, t, scale))).data.text;
+            const ff = matchFull(tt);
+            if (!full.length || (ff[0]?.score ?? 0) > (full[0]?.score ?? 0)) {
+                full = ff;
+                text = tt;
+                tooltip = t;
+                used = t;
+            }
+            if ((full[0]?.score ?? 0) >= 0.9) break;
         }
         // подпись клетки: проверка, если подсказка прочиталась неуверенно (или её нет, но есть клетка под курсором
         // или нажата горячая клавиша)

@@ -96,6 +96,9 @@ export interface SherpaApi {
         set(patch: Partial<PriceSettings>): Promise<PriceState>;
         onState(cb: (s: PriceState) => void): Unsub;
         openDebug(): Promise<void>;
+        /** Показать пробную карточку посреди экрана (проверить, что она видна поверх игры). */
+        showTest(): Promise<void>;
+        onPreview(cb: () => void): Unsub;
         onScan(cb: (r: PriceScan) => void): Unsub;
         result(r: PriceResult): void;
         debug(d: { png: string; text: string; box: unknown; item: string | null; score: number | null }): void;

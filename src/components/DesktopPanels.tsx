@@ -276,6 +276,11 @@ export function PricePanel() {
                     <button onClick={() => desktop!.price.openDebug()}>Открыть папку кадров</button>
                 </div>
             )}
+            <div className="row">
+                <button onClick={() => desktop!.price.showTest()} title="Карточка появится посреди экрана на 5 секунд — переключись в игру и проверь, что её видно">
+                    Показать пробную карточку
+                </button>
+            </div>
             {s.last && <div className="fix">Последний предмет: {s.last}</div>}
             <p className="hint">Игра должна быть в режиме «Оконный без рамки». Работает и с русской, и с английской версией игры.</p>
         </>

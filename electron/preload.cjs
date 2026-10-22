@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld("sherpa", {
         set: (patch) => ipcRenderer.invoke("price:set", patch),
         onState: on("price:state"),
         openDebug: () => ipcRenderer.invoke("price:openDebug"),
+        showTest: () => ipcRenderer.invoke("price:showTest"),
+        onPreview: on("price:preview"),
         onScan: on("price:scan"),
         result: (r) => ipcRenderer.send("price:result", r),
         debug: (d) => ipcRenderer.send("price:debug", d),
