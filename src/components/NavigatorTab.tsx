@@ -3,7 +3,7 @@ import type { PlayerFix } from "../lib/navigator";
 import type { LogState } from "../lib/gamelogs";
 import { fsSupported } from "../lib/navigator";
 import { desktop, type OverlayState } from "../lib/desktop";
-import { AppPanel, PricePanel } from "./DesktopPanels";
+import { AppPanel, HotkeysEditor, PricePanel } from "./DesktopPanels";
 
 export interface NavLink {
     status: "off" | "need-permission" | "on" | "error";
@@ -48,14 +48,6 @@ function sessionDate(folder: string) {
 }
 
 const STATUS = { off: "не найдено", "need-permission": "нужно разрешение", on: "подключено", error: "ошибка" };
-
-const HOTKEYS: [string, string][] = [
-    ["Ctrl+Shift+N", "показать / скрыть виджет"],
-    ["Ctrl+Shift+L", "пропускать клики сквозь виджет в игру (и обратно)"],
-    ["Ctrl+Shift+D", "цель выполнена — к следующей"],
-    ["Ctrl+Shift+S", "пропустить цель"],
-    ["Ctrl+Shift+P", "цена предмета под курсором"],
-];
 
 export default function NavigatorTab(p: Props) {
     if (!desktop && !fsSupported()) {
@@ -148,18 +140,7 @@ export default function NavigatorTab(p: Props) {
                     <label className="check">
                         <input type="checkbox" checked={p.overlay.clickThrough} onChange={(e) => desktop!.overlay.set({ clickThrough: e.target.checked })} /> Пропускать клики сквозь виджет в игру
                     </label>
-                    <table className="hotkeys">
-                        <tbody>
-                            {HOTKEYS.map(([k, t]) => (
-                                <tr key={k}>
-                                    <td>
-                                        <kbd>{k}</kbd>
-                                    </td>
-                                    <td>{t}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                    <HotkeysEditor />
                 </>
             ) : (
                 <>

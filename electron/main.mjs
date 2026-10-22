@@ -59,6 +59,7 @@ let settings = {
     overlay: { width: 420, height: 640, opacity: 0.6, clickThrough: false },
     paths: { screenshots: null, logs: null },
     prefs: { closeToTray: true },
+    hotkeys: {}, // переназначенные сочетания: действие → «Ctrl+Shift+P», "" — выключено
 };
 try {
     const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
@@ -637,25 +638,106 @@ function registerIpc() {
         return settings.lastSync;
     }
     handle("data:info", MAIN, () => ({ lastSync: settings.lastSync ?? null, hasUserData: exists(path.join(USER_DATA, "data", "regular.json")) }));
+
+    // горячие клавиши
+    const sendHotkeys = () => broadcast("hotkeys:state", hotkeysState());
+    handle("hotkeys:get", UI, () => hotkeysState());
+    /** acc: сочетание, "" — выключить, null — вернуть по умолчанию. */
+    handle("hotkeys:set", MAIN, (_e, id, acc) => {
+        if (!Object.hasOwn(HOTKEY_ACTIONS, id)) throw new Error("Нет такого действия");
+        if (acc !== null && acc !== "" && !validAccelerator(acc)) throw new Error("Такое сочетание нельзя назначить");
+        const next = acc === null ? HOTKEY_DEFAULTS[id] : acc;
+        const other = next && Object.keys(HOTKEY_ACTIONS).find((k) => k !== id && hotkeyOf(k) === next);
+        if (other) throw new Error("Это сочетание уже назначено другому действию");
+        if (acc === null) delete settings.hotkeys[id];
+        else settings.hotkeys[id] = acc;
+        saveSettings();
+        hotkeysPaused = false;
+        clearTimeout(pauseTimer);
+        registerHotkeys();
+        sendHotkeys();
+        return hotkeysState();
+    });
+    // на время записи сочетания свои клавиши отпускаются — иначе занятое Sherpa сочетание не дойдёт до окна
+    handle("hotkeys:pause", MAIN, (_e, on) => {
+        hotkeysPaused = on === true;
+        clearTimeout(pauseTimer);
+        if (hotkeysPaused) pauseTimer = setTimeout(() => ((hotkeysPaused = false), registerHotkeys(), sendHotkeys()), 30_000); // страховка
+        registerHotkeys();
+        if (!hotkeysPaused) sendHotkeys();
+    });
 }
 
 // ---------------- горячие клавиши ----------------
 
-const HOTKEYS = {
-    "CommandOrControl+Shift+N": () => {
+const HOTKEY_DEFAULTS = {
+    overlay: "Ctrl+Shift+N",
+    clickThrough: "Ctrl+Shift+L",
+    done: "Ctrl+Shift+D",
+    skip: "Ctrl+Shift+S",
+    price: "Ctrl+Shift+P",
+};
+const HOTKEY_ACTIONS = {
+    overlay: () => {
         if (overlayWin?.isVisible()) overlayWin.hide();
         else createOverlay();
     },
-    "CommandOrControl+Shift+L": () => {
+    clickThrough: () => {
         settings.overlay.clickThrough = !settings.overlay.clickThrough;
         saveSettings();
         applyClickThrough();
         sendOverlayState();
     },
-    "CommandOrControl+Shift+D": () => mainWin?.webContents.send("overlay:action", { type: "done" }),
-    "CommandOrControl+Shift+S": () => mainWin?.webContents.send("overlay:action", { type: "skip" }),
-    "CommandOrControl+Shift+P": () => price?.scanNow(),
+    done: () => mainWin?.webContents.send("overlay:action", { type: "done" }),
+    skip: () => mainWin?.webContents.send("overlay:action", { type: "skip" }),
+    price: () => price?.scanNow(),
 };
+/** Действия, чьё сочетание не удалось занять: его держит другая программа, нажатия уходят в игру. */
+let busyHotkeys = [];
+let hotkeysPaused = false;
+let pauseTimer = null;
+
+const hotkeyOf = (id) => (typeof settings.hotkeys[id] === "string" ? settings.hotkeys[id] : HOTKEY_DEFAULTS[id]);
+
+const MODIFIERS = ["Ctrl", "Alt", "Shift", "Super"];
+const KEY_RE = /^([A-Z0-9]|F([1-9]|1\d|2[0-4])|Space|Tab|Backspace|Delete|Insert|Home|End|PageUp|PageDown|Up|Down|Left|Right|Num[0-9]|Plus|-|=|\[|\]|;|'|,|\.|\/|\\|`)$/;
+/** Сочетание из интерфейса: модификаторы в обычном порядке + одна клавиша; без модификатора — только F-клавиши. */
+function validAccelerator(acc) {
+    if (typeof acc !== "string" || acc.length > 40) return false;
+    const parts = acc.split("+");
+    const key = parts.pop();
+    if (!KEY_RE.test(key) || new Set(parts).size !== parts.length || !parts.every((m) => MODIFIERS.includes(m))) return false;
+    return parts.length > 0 || /^F\d+$/.test(key);
+}
+
+/** (Пере)занимает все сочетания: при запуске, после изменения и после записи нового. */
+function registerHotkeys() {
+    // испорченный файл настроек: всё неверное — к значениям по умолчанию
+    if (!settings.hotkeys || typeof settings.hotkeys !== "object") settings.hotkeys = {};
+    for (const [id, acc] of Object.entries(settings.hotkeys)) if (!Object.hasOwn(HOTKEY_ACTIONS, id) || (acc !== "" && !validAccelerator(acc))) delete settings.hotkeys[id];
+    globalShortcut.unregisterAll();
+    busyHotkeys = [];
+    if (hotkeysPaused) return;
+    // register не бросает, а возвращает false, если сочетание уже заняла другая программа
+    for (const [id, fn] of Object.entries(HOTKEY_ACTIONS)) {
+        const acc = hotkeyOf(id);
+        if (!acc) continue;
+        let ok = false;
+        try {
+            ok = globalShortcut.register(acc, fn);
+        } catch {
+            /* неверное сочетание */
+        }
+        if (!ok) {
+            busyHotkeys.push(id);
+            console.warn("Горячая клавиша занята другой программой:", acc);
+        }
+    }
+}
+
+function hotkeysState() {
+    return Object.keys(HOTKEY_ACTIONS).map((id) => ({ id, accelerator: hotkeyOf(id), default: HOTKEY_DEFAULTS[id], busy: busyHotkeys.includes(id) }));
+}
 
 // ---------------- запуск ----------------
 
@@ -676,13 +758,7 @@ app.whenReady().then(async () => {
             overlayWin?.destroy();
         },
     });
-    for (const [acc, fn] of Object.entries(HOTKEYS)) {
-        try {
-            globalShortcut.register(acc, fn);
-        } catch {
-            /* сочетание занято другой программой */
-        }
-    }
+    registerHotkeys();
 });
 
 app.on("will-quit", () => globalShortcut.unregisterAll());

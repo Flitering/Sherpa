@@ -6,7 +6,8 @@ import DeletePlayer from "./DeletePlayer";
 import type { NavLink } from "./NavigatorTab";
 import type { LogState } from "../lib/gamelogs";
 import { fsSupported } from "../lib/navigator";
-import { desktop } from "../lib/desktop";
+import { desktop, type HotkeyId } from "../lib/desktop";
+import { useHotkeys } from "./DesktopPanels";
 import TermsModal from "./TermsModal";
 
 interface Props {
@@ -34,6 +35,8 @@ export default function SetupWizard(p: Props) {
     const [step, setStep] = useState(0);
     const [terms, setTerms] = useState(false);
     const [notif, setNotif] = useState(typeof Notification !== "undefined" ? Notification.permission : "denied");
+    const hotkeys = useHotkeys();
+    const hk = (id: HotkeyId) => hotkeys.find((h) => h.id === id)?.accelerator || "выкл.";
     const supported = !!desktop || fsSupported();
     const me = p.state.players.find((x) => x.id === p.state.activePlayer) ?? p.state.players[0];
 
@@ -214,8 +217,8 @@ export default function SetupWizard(p: Props) {
                                 </li>
                                 <li>Когда начнётся рейд, виджет откроется сам и предложит маршрут — выбери рейд прямо в нём.</li>
                                 <li>
-                                    Горячие клавиши: <kbd>Ctrl+Shift+N</kbd> показать/скрыть, <kbd>Ctrl+Shift+L</kbd> пропускать клики в игру, <kbd>Ctrl+Shift+D</kbd> цель выполнена,{" "}
-                                    <kbd>Ctrl+Shift+S</kbd> пропустить.
+                                    Горячие клавиши: <kbd>{hk("overlay")}</kbd> показать/скрыть, <kbd>{hk("clickThrough")}</kbd> пропускать клики в игру, <kbd>{hk("done")}</kbd> цель
+                                    выполнена, <kbd>{hk("skip")}</kbd> пропустить. Переназначить — на вкладке «Навигатор».
                                 </li>
                             </ol>
                             <label className="check">
@@ -262,7 +265,7 @@ export default function SetupWizard(p: Props) {
                                 <li className={p.shots.status === "on" ? "ok" : ""}>Скриншоты: {p.shots.status === "on" ? "подключены" : "не подключены — не будет позиции на карте"}</li>
                                 <li className={p.logs.status === "on" ? "ok" : ""}>Логи: {p.logs.status === "on" ? "подключены" : "не подключены — карту и квесты придётся отмечать вручную"}</li>
                                 {desktop ? (
-                                    <li className={p.state.autoOverlay !== false ? "ok" : ""}>Виджет: {p.state.autoOverlay !== false ? "откроется сам при начале рейда" : "открывается вручную (Ctrl+Shift+N)"}</li>
+                                    <li className={p.state.autoOverlay !== false ? "ok" : ""}>Виджет: {p.state.autoOverlay !== false ? "откроется сам при начале рейда" : `открывается вручную (${hk("overlay")})`}</li>
                                 ) : (
                                     <li className={notif === "granted" ? "ok" : ""}>Уведомления: {notif === "granted" ? "разрешены" : "выключены"}</li>
                                 )}

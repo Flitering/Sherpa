@@ -23,6 +23,12 @@ contextBridge.exposeInMainWorld("sherpa", {
         prefs: () => ipcRenderer.invoke("app:prefs"),
         setPrefs: (patch) => ipcRenderer.invoke("app:setPrefs", patch),
     },
+    hotkeys: {
+        get: () => ipcRenderer.invoke("hotkeys:get"),
+        set: (id, acc) => ipcRenderer.invoke("hotkeys:set", id, acc),
+        pause: (on) => ipcRenderer.invoke("hotkeys:pause", on),
+        onState: on("hotkeys:state"),
+    },
     store: {
         load: () => ipcRenderer.invoke("store:load"),
         save: (json) => ipcRenderer.invoke("store:save", json),

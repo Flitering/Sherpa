@@ -1,6 +1,146 @@
 import { useEffect, useState } from "react";
-import { desktop, type AppPrefs, type PriceState, type UpdateState } from "../lib/desktop";
+import { desktop, type AppPrefs, type Hotkey, type HotkeyId, type PriceState, type UpdateState } from "../lib/desktop";
 import TermsModal from "./TermsModal";
+
+/** Горячие клавиши (с отметкой, какие заняты другой программой) — общие для всех вкладок. */
+export function useHotkeys(): Hotkey[] {
+    const [list, setList] = useState<Hotkey[]>([]);
+    useEffect(() => {
+        if (!desktop) return;
+        desktop.hotkeys.get().then(setList);
+        return desktop.hotkeys.onState(setList);
+    }, []);
+    return list;
+}
+
+const HOTKEY_LABELS: Record<HotkeyId, string> = {
+    overlay: "показать / скрыть виджет",
+    clickThrough: "пропускать клики сквозь виджет в игру (и обратно)",
+    done: "цель выполнена — к следующей",
+    skip: "пропустить цель",
+    price: "цена предмета под курсором",
+};
+
+/** Клавиша по физическому положению (e.code), чтобы русская раскладка не мешала → имя в сочетании Electron. */
+const CODE_KEYS: Record<string, string> = {
+    Space: "Space", Tab: "Tab", Backspace: "Backspace", Delete: "Delete", Insert: "Insert", Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown",
+    ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right", Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]",
+    Semicolon: ";", Quote: "'", Comma: ",", Period: ".", Slash: "/", Backslash: "\\", Backquote: "`",
+};
+function keyOf(code: string): string | null {
+    let m: RegExpExecArray | null;
+    if ((m = /^Key([A-Z])$/.exec(code))) return m[1];
+    if ((m = /^Digit(\d)$/.exec(code))) return m[1];
+    if ((m = /^Numpad(\d)$/.exec(code))) return "Num" + m[1];
+    if (/^F([1-9]|1\d|2[0-4])$/.test(code)) return code;
+    return CODE_KEYS[code] ?? null;
+}
+function acceleratorOf(e: KeyboardEvent): string | null {
+    const key = keyOf(e.code);
+    if (!key) return null;
+    const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean) as string[];
+    return [...mods, key].join("+");
+}
+
+/** Таблица горячих клавиш с переназначением: «Изменить» → нажать сочетание. */
+export function HotkeysEditor() {
+    const list = useHotkeys();
+    const [rec, setRec] = useState<HotkeyId | null>(null);
+    const [err, setErr] = useState("");
+
+    useEffect(() => {
+        if (!rec || !desktop) return;
+        const stop = () => {
+            setRec(null);
+            desktop!.hotkeys.pause(false);
+        };
+        const onKey = async (e: KeyboardEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.code === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey) return stop();
+            const acc = acceleratorOf(e);
+            if (!acc) return; // пока нажаты только модификаторы
+            if (!acc.includes("+") && !/^F\d+$/.test(acc)) {
+                setErr("Нужен модификатор (Ctrl, Alt, Shift) — одиночные клавиши нужны в игре. Без него можно только F1–F24.");
+                return;
+            }
+            setRec(null);
+            try {
+                await desktop!.hotkeys.set(rec, acc);
+                setErr("");
+            } catch (x) {
+                setErr(String((x as Error).message).replace(/^.*Error: /, ""));
+                desktop!.hotkeys.pause(false);
+            }
+        };
+        window.addEventListener("keydown", onKey, true);
+        window.addEventListener("blur", stop);
+        return () => {
+            window.removeEventListener("keydown", onKey, true);
+            window.removeEventListener("blur", stop);
+        };
+    }, [rec]);
+
+    const start = (id: HotkeyId) => {
+        setErr("");
+        setRec(id);
+        desktop!.hotkeys.pause(true);
+    };
+    const set = async (id: HotkeyId, acc: string | null) => {
+        try {
+            await desktop!.hotkeys.set(id, acc);
+            setErr("");
+        } catch (x) {
+            setErr(String((x as Error).message).replace(/^.*Error: /, ""));
+        }
+    };
+
+    return (
+        <>
+            <table className="hotkeys">
+                <tbody>
+                    {list.map((h) => (
+                        <tr key={h.id}>
+                            <td>{rec === h.id ? <kbd className="rec">нажми сочетание…</kbd> : <kbd>{h.accelerator || "выкл."}</kbd>}</td>
+                            <td>
+                                {HOTKEY_LABELS[h.id]}
+                                {h.busy && <span className="warn"> — занято другой программой</span>}
+                            </td>
+                            <td className="hk-act">
+                                {rec === h.id ? (
+                                    <button className="link" onClick={() => (setRec(null), desktop!.hotkeys.pause(false))}>
+                                        отмена
+                                    </button>
+                                ) : (
+                                    <>
+                                        <button className="link" disabled={!!rec} onClick={() => start(h.id)}>
+                                            изменить
+                                        </button>
+                                        {h.accelerator !== h.default && (
+                                            <button className="link" disabled={!!rec} onClick={() => set(h.id, null)} title={`Вернуть ${h.default}`}>
+                                                сбросить
+                                            </button>
+                                        )}
+                                        {h.accelerator && (
+                                            <button className="link" disabled={!!rec} onClick={() => set(h.id, "")}>
+                                                выключить
+                                            </button>
+                                        )}
+                                    </>
+                                )}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+            {rec && <p className="hint">Нажми новое сочетание. Esc — отмена.</p>}
+            {err && <p className="hint warn">{err}</p>}
+            {list.some((h) => h.busy) && (
+                <p className="hint warn">Часть сочетаний заняла другая программа (оверлей видеокарты, Discord и т. п.) — эти нажатия уходят в игру. Назначь другое сочетание.</p>
+            )}
+        </>
+    );
+}
 
 /** Состояние обновления — общее для шапки и вкладки «Навигатор». */
 export function useUpdate(): [UpdateState | undefined, () => void] {
@@ -91,6 +231,7 @@ export function AppPanel() {
 
 export function PricePanel() {
     const [s, setS] = useState<PriceState>();
+    const scanKey = useHotkeys().find((h) => h.id === "price");
     useEffect(() => {
         if (!desktop) return;
         desktop.price.get().then(setS);
@@ -114,8 +255,14 @@ export function PricePanel() {
             </label>
             <label className="check">
                 <input type="checkbox" checked={s.auto} disabled={!s.enabled} onChange={(e) => set({ auto: e.target.checked })} /> Сама при наведении (иначе — по{" "}
-                <kbd>Ctrl+Shift+P</kbd>)
+                <kbd>{scanKey?.accelerator || "горячей клавише"}</kbd>)
             </label>
+            {scanKey?.busy && (
+                <p className="hint warn">
+                    <kbd>{scanKey.accelerator}</kbd> занято другой программой (оверлей видеокарты, Discord и т. п.) — нажатия уходят в игру. Назначь другое
+                    сочетание на вкладке «Навигатор».
+                </p>
+            )}
             <label className="check">
                 <input type="checkbox" checked={s.onlyWithGame} disabled={!s.enabled} onChange={(e) => set({ onlyWithGame: e.target.checked })} /> Только пока
                 запущена игра

@@ -2,7 +2,7 @@
 // Получает готовую модель от главного окна и только рисует её.
 
 import { useEffect, useState } from "react";
-import { desktop, type OverlayState } from "../lib/desktop";
+import { desktop, type Hotkey, type OverlayState } from "../lib/desktop";
 import { fmtClock, type HudModel, type OverlayModel, type RaidOffer } from "../lib/hudModel";
 import MiniMap from "../components/MiniMap";
 
@@ -33,7 +33,15 @@ export default function OverlayApp() {
     const [model, setModel] = useState<OverlayModel>({ kind: "idle" });
     const [st, setSt] = useState<OverlayState>({ opacity: 0.6, clickThrough: false, open: true });
     const [view, setView] = useState<View>(loadView);
+    const [lockKey, setLockKey] = useState("");
     const now = useNow();
+
+    useEffect(() => {
+        if (!desktop) return;
+        const pick = (l: Hotkey[]) => setLockKey(l.find((h) => h.id === "clickThrough")?.accelerator ?? "");
+        desktop.hotkeys.get().then(pick);
+        return desktop.hotkeys.onState(pick);
+    }, []);
 
     useEffect(() => {
         if (!desktop) return;
@@ -92,7 +100,11 @@ export default function OverlayApp() {
                     </button>
                     <button
                         className={st.clickThrough ? "on" : ""}
-                        title={st.clickThrough ? "Клики проходят в игру. Ctrl+Shift+L — вернуть" : "Пропускать клики в игру (Ctrl+Shift+L)"}
+                        title={
+                            st.clickThrough
+                                ? `Клики проходят в игру.${lockKey ? ` ${lockKey} — вернуть` : ""}`
+                                : `Пропускать клики в игру${lockKey ? ` (${lockKey})` : ""}`
+                        }
                         onClick={() => desktop?.overlay.set({ clickThrough: !st.clickThrough })}
                     >
                         {st.clickThrough ? "🔒" : "🔓"}

@@ -60,6 +60,16 @@ export interface AppPrefs {
     closeToTray: boolean;
 }
 
+export type HotkeyId = "overlay" | "clickThrough" | "done" | "skip" | "price";
+export interface Hotkey {
+    id: HotkeyId;
+    /** «Ctrl+Shift+P»; пустая строка — выключено. */
+    accelerator: string;
+    default: string;
+    /** Сочетание держит другая программа — нажатия уходят в игру. */
+    busy: boolean;
+}
+
 export interface SherpaApi {
     platform: string;
     win: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>; isMaximized(): Promise<boolean>; onState(cb: (s: { maximized: boolean }) => void): Unsub };
@@ -69,6 +79,14 @@ export interface SherpaApi {
         showFolder(p: string): Promise<void>;
         prefs(): Promise<AppPrefs>;
         setPrefs(patch: Partial<AppPrefs>): Promise<AppPrefs>;
+    };
+    hotkeys: {
+        get(): Promise<Hotkey[]>;
+        /** acc: сочетание, "" — выключить, null — по умолчанию. */
+        set(id: HotkeyId, acc: string | null): Promise<Hotkey[]>;
+        /** Отпустить свои сочетания на время записи нового. */
+        pause(on: boolean): Promise<void>;
+        onState(cb: (s: Hotkey[]) => void): Unsub;
     };
     store: { load(): Promise<string | null>; save(json: string): Promise<void> };
     price: {
