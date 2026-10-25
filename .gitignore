@@ -10,3 +10,6 @@ public/ocr/
 .DS_Store
 Thumbs.db
 release/
+
+# ключ API tarkov-market (npm run sync:quests)
+.tarkov-market-key

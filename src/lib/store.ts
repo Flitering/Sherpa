@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { desktop } from "./desktop";
 import type { GameMode, Player } from "../types";
 import type { RaidSettings } from "./raids";
+import type { QuestPick } from "./quests";
 
 export interface AppState {
     version: 1;
@@ -24,6 +25,8 @@ export interface AppState {
     screenshotKey?: string;
     /** Десктоп: открывать виджет автоматически, когда начинается рейд. */
     autoOverlay?: boolean;
+    /** Квесты, которые игрок собирается выполнять. Нет записи — все. */
+    questPick?: QuestPick;
 }
 
 const KEY = "sherpa:v1";
@@ -129,6 +132,9 @@ function sanitizePlayers(s: AppState) {
             objectivesDone: p.objectivesDone && typeof p.objectivesDone === "object" ? p.objectivesDone : {},
         }));
     if (!s.players.some((p) => p.id === s.activePlayer)) s.activePlayer = s.players[0]?.id;
+    const pick = s.questPick;
+    const ids = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, 5000) : []);
+    s.questPick = pick && typeof pick === "object" && ["all", "story", "none"].includes(pick.base) ? { base: pick.base, on: ids(pick.on), off: ids(pick.off) } : undefined;
 }
 
 /** Удалить игрока; если это был «я» — «я» становится первый из оставшихся. */

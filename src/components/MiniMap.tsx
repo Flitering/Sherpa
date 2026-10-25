@@ -140,7 +140,7 @@ export default function MiniMap({ display, mapKey, color, fix, points, guide, ex
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, size.w, size.h);
 
-        const center = fix ?? points.find((p) => p.target) ?? points[0];
+        const center = fix ?? points.find((p) => p.target) ?? points.find((p) => !p.alt) ?? points[0];
         if (!center) return;
         const [cx, cy] = base.toPx(center);
         // поворот «вперёд — вверх»: угол направления взгляда на подложке
@@ -209,10 +209,12 @@ export default function MiniMap({ display, mapKey, color, fix, points, guide, ex
             ctx.save();
             ctx.translate(px, py);
             ctx.rotate(-rot);
-            const r = (p.target ? 9 : 6) * lw;
+            const r = (p.target ? 9 : p.alt ? 4 : 6) * lw;
             ctx.fillStyle = p.target ? color : "rgba(8,10,8,0.85)";
             ctx.strokeStyle = color;
-            ctx.lineWidth = 2 * lw;
+            ctx.lineWidth = (p.alt ? 1.5 : 2) * lw;
+            // другое возможное место цели — пунктиром
+            if (p.alt) ctx.setLineDash([2 * lw, 2 * lw]);
             ctx.beginPath();
             ctx.arc(0, 0, r, 0, Math.PI * 2);
             ctx.fill();

@@ -363,17 +363,36 @@ function MapView(props: Props) {
             const dim = sel !== null && ri !== sel ? " dim" : "";
             const faint = faintRoutes ? " faint" : "";
             const color = raid.color;
-            for (const st of raid.steps) {
-                for (const pt of st.stop.points) {
+            // все места одной цели — одна группа: пунктир от основной метки к каждому запасному месту
+            // и общая подсветка при наведении на любую из меток
+            const groups = new Map<string, (L.Marker | L.Polyline)[]>();
+            const join = (id: string, l: L.Marker | L.Polyline) => groups.set(id, [...(groups.get(id) ?? []), l]);
+            raid.steps.forEach((st, si) => {
+                const total = st.stop.points.length;
+                st.stop.points.forEach((pt, pi) => {
                     const off = lvl(pt.position, pt.top, pt.bottom);
                     if (pt.outline) {
                         L.polygon(pt.outline.map(([x, z]) => toLatLng({ x, z })), { color, weight: 1.5, fillOpacity: 0.15, className: "zone" + off + dim, interactive: false }).addTo(g);
                     }
-                    if (pt.kind === "item" && pt.position !== st.point) {
-                        L.circleMarker(toLatLng(pt.position), { radius: 3.5, color, weight: 1.5, fillOpacity: 0.3, className: "alt" + off + dim, interactive: false }).addTo(g);
-                    }
-                }
-            }
+                    if (pt.position === st.point) return;
+                    // другие места, где может быть цель (точки появления предмета, запасные зоны): маршрут ведёт
+                    // к ближайшему, но подойдёт любое
+                    const done = props.doneStops.has(st.stop.id);
+                    const link = L.polyline([toLatLng(st.point), toLatLng(pt.position)], { color, className: "alt-link" + dim + (done ? " done" : ""), interactive: false }).addTo(g);
+                    join(st.stop.id, link);
+                    const m = L.marker(toLatLng(pt.position), {
+                        icon: L.divIcon({ className: "stop-alt" + dim + (done ? " done" : "") + off, html: `<span style="--rc:${color}">${ri + 1}.${si + 1}</span>`, iconSize: [22, 16] }),
+                        zIndexOffset: dim ? -100 : 500,
+                    });
+                    m.bindTooltip(
+                        `<b>${escapeHtml(st.stop.task.name)}</b><br>${escapeHtml(st.stop.objective.text)}<br><span class="muted">Возможное место ${pi + 1} из ${total} — маршрут ведёт к ближайшему${pt.approx ? "<br>место по карте вики, примерно ±10 м" : ""}</span>`,
+                        { direction: "top", offset: [0, -8] },
+                    );
+                    m.on("click", () => onSelectRef.current(st.stop.id, ri));
+                    m.addTo(g);
+                    join(st.stop.id, m);
+                });
+            });
             if (raid.legs?.length) {
                 const lines = raid.legs.map((leg) => leg.map(([x, z]) => toLatLng({ x, z })));
                 L.polyline(lines, { color, className: "route-line real" + dim + faint, interactive: false }).addTo(g);
@@ -397,14 +416,25 @@ function MapView(props: Props) {
                 const cls = "stop" + dim + (done ? " done" : "") + (target ? " target" : "") + (shared ? " shared" : "") + lvl(s.point, pt?.top, pt?.bottom);
                 const label = `${ri + 1}.${i + 1}`; // всегда «рейд.точка» — так же, как в карточках квестов
                 const who = s.stop.players.map((p) => `<i style="background:${safeColor(p.color)}"></i>`).join("");
+                const places = s.stop.points.length;
+                // число мест, где может быть цель, — значком на основной метке
+                const many = places > 1 ? `<b class="places" style="--rc:${color}">${places}</b>` : "";
                 const m = L.marker(toLatLng(s.point), {
-                    icon: L.divIcon({ className: cls, html: `<span style="--rc:${color}">${done ? "✓" : label}</span><em>${who}</em>`, iconSize: [26, 26] }),
+                    icon: L.divIcon({ className: cls, html: `<span style="--rc:${color}">${done ? "✓" : label}</span>${many}<em>${who}</em>`, iconSize: [26, 26] }),
                     zIndexOffset: dim ? 0 : 1000,
                 });
-                m.bindTooltip(`<b>${escapeHtml(s.stop.task.name)}</b><br>${escapeHtml(s.stop.objective.text)}`, { direction: "top", offset: [0, -12] });
+                const where =
+                    (places > 1 ? `<br><span class="muted">Одно из ${places} возможных мест (связаны пунктиром) — ближайшее по маршруту</span>` : "") +
+                    (pt?.approx ? `<br><span class="muted">место по карте вики, примерно ±10 м</span>` : "");
+                m.bindTooltip(`<b>${escapeHtml(s.stop.task.name)}</b><br>${escapeHtml(s.stop.objective.text)}${where}`, { direction: "top", offset: [0, -12] });
                 m.on("click", () => onSelectRef.current(s.stop.id, ri));
                 m.addTo(g);
+                if (places > 1) join(s.stop.id, m);
             });
+            for (const list of groups.values()) {
+                const hl = (on: boolean) => list.forEach((l) => l.getElement()?.classList.toggle("alt-hl", on));
+                for (const l of list) if (l instanceof L.Marker) l.on("mouseover", () => hl(true)).on("mouseout", () => hl(false));
+            }
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [props.plan, sel, props.doneStops, props.targetStop, faintRoutes, activeExtents, mapGen]);

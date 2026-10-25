@@ -202,6 +202,7 @@ export default function SetupWizard(p: Props) {
                                     <button className="primary" onClick={p.onSyncHistory} disabled={!!p.historyProgress}>
                                         {p.historyProgress ?? `⟳ Загрузить прогресс квестов из всех логов (игрок «${me.name}»)`}
                                     </button>
+                                    <div className="hint">Игра хранит логи только последних сессий: квесты, взятые раньше, по логам не найти — распознай список заданий со скриншота на вкладке «Квесты».</div>
                                     {p.syncNote && <div className="sync-note">{p.syncNote}</div>}
                                 </>
                             )}

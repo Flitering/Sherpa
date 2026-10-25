@@ -112,6 +112,7 @@ export default function NavigatorTab(p: Props) {
                     <button onClick={p.onSyncHistory} disabled={!!p.historyProgress}>
                         {p.historyProgress ?? "⟳ Загрузить прогресс из всех логов игры"}
                     </button>
+                    <div className="hint">Игра хранит логи только последних сессий: квесты, взятые раньше, по логам не найти — распознай список заданий со скриншота на вкладке «Квесты».</div>
                 </>
             )}
             {p.syncNote && <div className="sync-note">{p.syncNote}</div>}

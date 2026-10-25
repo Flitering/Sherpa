@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Bundle, GameMode, Player, Task, TaskStatus, Vec3 } from "./types";
 import { usePersistentState } from "./lib/store";
-import { activeStops, loadout, objectivePoints, taskOnMap } from "./lib/quests";
+import { activeStops, isPicked, loadout, objectivePoints, taskOnMap, type QuestPick } from "./lib/quests";
 import { readExtractsFromShot } from "./lib/extractOcr";
 import { DEFAULT_RAID_SETTINGS, planRaids, planWithSpawn, type Raid, type RaidPlan, type RaidSettings, type RaidStep } from "./lib/raids";
 import { refineRaids } from "./lib/realRoutes";
@@ -150,7 +150,9 @@ export default function App() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [availEx, mapKey, exitsLive?.raid, exitsLive?.names.join("|")],
     );
-    const stops = useMemo(() => (bundle && gameMap ? activeStops(bundle, state.players, mapKey, includeShoot) : []), [bundle, gameMap, state.players, mapKey, includeShoot]);
+    // карта, рейды, пути и снаряжение — только по квестам, которые игрок выбрал
+    const planBundle = useMemo(() => (bundle ? { ...bundle, tasks: bundle.tasks.filter((t) => isPicked(t, state.questPick)) } : null), [bundle, state.questPick]);
+    const stops = useMemo(() => (planBundle && gameMap ? activeStops(planBundle, state.players, mapKey, includeShoot) : []), [planBundle, gameMap, state.players, mapKey, includeShoot]);
     // рейд по логам (нужен уже здесь: план зависит от точки спавна текущего рейда)
     const raidStartLog = logState?.raidStart;
     // поиск матча без загрузки карты (его могли отменить) считается рейдом 6 минут, загруженный рейд — 75
@@ -194,9 +196,9 @@ export default function App() {
     const setSel = (i: number | null) => setSelectedRaid((s) => ({ ...s, [mapKey]: i }));
 
     const sideTasks = useMemo(() => {
-        if (!bundle) return [];
+        if (!planBundle) return [];
         const out: { task: Task; text: string; players: Player[] }[] = [];
-        for (const task of bundle.tasks) {
+        for (const task of planBundle.tasks) {
             const owners = state.players.filter((p) => p.tasks[task.id] === "active");
             if (!owners.length) continue;
             for (const o of task.objectives) {
@@ -208,13 +210,13 @@ export default function App() {
             }
         }
         return out;
-    }, [bundle, state.players, mapKey, includeShoot]);
+    }, [planBundle, state.players, mapKey, includeShoot]);
 
     const otherTasks = useMemo(
-        () => (bundle && showOther ? bundle.tasks.filter((t) => taskOnMap(t, mapKey) && !state.players.some((p) => p.tasks[t.id])) : []),
-        [bundle, showOther, mapKey, state.players],
+        () => (planBundle && showOther ? planBundle.tasks.filter((t) => taskOnMap(t, mapKey) && !state.players.some((p) => p.tasks[t.id])) : []),
+        [planBundle, showOther, mapKey, state.players],
     );
-    const gear = useMemo(() => (bundle ? loadout(bundle, state.players, mapKey) : null), [bundle, state.players, mapKey]);
+    const gear = useMemo(() => (planBundle ? loadout(planBundle, state.players, mapKey) : null), [planBundle, state.players, mapKey]);
 
     // ---------- прогресс ----------
     const setTaskStatus = useCallback(
@@ -246,6 +248,7 @@ export default function App() {
             })),
         [setState],
     );
+    const setQuestPick = useCallback((questPick: QuestPick) => setState((st) => ({ ...st, questPick })), [setState]);
     const takeTask = useCallback(
         (taskId: string) => {
             const me = state.players.find((p) => p.id === state.activePlayer) ?? state.players[0];
@@ -855,6 +858,8 @@ export default function App() {
                                     scan={scanEl}
                                     stopLabels={stopLabels}
                                     onPickStop={pickStop}
+                                    pick={state.questPick}
+                                    setPick={setQuestPick}
                                 />
                             )}
                             {tab === "raids" && (
@@ -949,7 +954,16 @@ export default function App() {
                             {tab === "players" && <PlayersTab state={state} setState={setState} />}
                         </div>
                         <footer>
-                            Данные <a href="https://tarkov.dev" target="_blank" rel="noreferrer">tarkov.dev</a> от {new Date(bundle.generatedAt).toLocaleDateString("ru-RU")} · карты{" "}
+                            Данные <a href="https://tarkov.dev" target="_blank" rel="noreferrer">tarkov.dev</a> от {new Date(bundle.generatedAt).toLocaleDateString("ru-RU")}
+                            {bundle.questsCheckedAt && (
+                                <>
+                                    {" "}· список квестов{" "}
+                                    <a href="https://tarkov-market.com" target="_blank" rel="noreferrer">
+                                        tarkov-market.com
+                                    </a>
+                                </>
+                            )}{" "}
+                            · карты{" "}
                             <a href="https://github.com/the-hideout/tarkov-dev-svg-maps" target="_blank" rel="noreferrer">tarkov-dev-svg-maps</a> (CC BY-NC-SA 4.0)
                         </footer>
                     </aside>

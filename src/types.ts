@@ -27,7 +27,8 @@ export interface Objective {
     count?: number;
     maps: string[];
     zones?: Zone[];
-    locations?: { map: string; positions: Vec3[] }[];
+    /** approx — места не из tarkov.dev, а пересчитанные с карты вики (scripts/quest-overrides.json), точность ~5–10 м. */
+    locations?: { map: string; positions: Vec3[]; approx?: boolean }[];
     items?: string[];
     fir?: boolean;
     markerItem?: string;
@@ -50,6 +51,10 @@ export interface Task {
     traderReq?: { trader: string; type: string; value: number }[];
     /** Открывается по сюжету (диалог или сюжетное событие), а не по уровню. */
     story?: boolean;
+    /** Сюжетная глава (основной сюжет игры, без торговца) — по списку tarkov-market. */
+    chapter?: boolean;
+    /** Квест есть в игре, но tarkov.dev ещё не опубликовал его цели. */
+    noData?: boolean;
     kappa: boolean;
     lightkeeper: boolean;
     faction: string;
@@ -57,7 +62,10 @@ export interface Task {
     image?: string;
     experience: number;
     requires: { task: string; status: string[] }[];
-    neededKeys: { map?: string; keys: string[] }[];
+    /** given — ключ выдают при взятии квеста. */
+    neededKeys: { map?: string; keys: string[]; given?: boolean }[];
+    /** Предметы, которые выдают при взятии квеста. */
+    startItems?: { item: string; count: number }[];
     objectives: Objective[];
 }
 
@@ -162,6 +170,8 @@ export interface Bundle {
     lang: string;
     generatedAt: string;
     source: string;
+    /** Когда список квестов сверялся с tarkov-market. */
+    questsCheckedAt?: string;
     maps: GameMap[];
     tasks: Task[];
     items: Record<string, Item>;

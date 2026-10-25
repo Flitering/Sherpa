@@ -39,6 +39,8 @@ export interface HudPoint {
     z: number;
     label: string;
     target?: boolean;
+    /** Другое возможное место той же цели (маршрут ведёт к ближайшему). */
+    alt?: boolean;
 }
 
 export interface HudModel {
@@ -158,7 +160,11 @@ export function computeHud(inp: HudInput): HudModel {
         pathMin: guide ? Math.max(1, Math.round((guide.length * 1.1) / 2.2 / 60)) : undefined,
         arrived: straight !== undefined && straight < 7 && !floorText,
         guide: guide?.points,
-        points: inp.remaining.map((s) => ({ ...s.point, label: `${raid.index + 1}.${raid.steps.indexOf(s) + 1}`, target: s === target })),
+        points: inp.remaining.flatMap((s) => {
+            const label = `${raid.index + 1}.${raid.steps.indexOf(s) + 1}`;
+            const alts = s.stop.points.filter((p) => p.position !== s.point).map((p) => ({ ...p.position, label, alt: true }));
+            return [...alts, { ...s.point, label, target: s === target }];
+        }),
         extract: extract ? { x: extract.position.x, z: extract.position.z, name: extract.name } : undefined,
         screenshotKey: inp.screenshotKey,
     };

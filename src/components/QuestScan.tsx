@@ -24,7 +24,6 @@ export default function QuestScan({ bundle, players, activePlayer, shotsDir, onA
 
     const run = async (get: () => Promise<Blob | ImageBitmap | null>) => {
         setNote(undefined);
-        setMatches(undefined);
         try {
             setBusy("получаю изображение…");
             const img = await get();
@@ -36,9 +35,13 @@ export default function QuestScan({ bundle, players, activePlayer, shotsDir, onA
             const text = await recognize(img, (p) => setBusy(p));
             setRaw(text);
             const m = matchTasks(bundle, text);
-            setMatches(m);
-            setChecked(new Set(m.map((x) => x.taskId)));
+            // длинный список не влезает в один экран — найденное на следующих скриншотах добавляется к прежнему
+            const prev = matches ?? [];
+            const fresh = m.filter((x) => !prev.some((p) => p.taskId === x.taskId));
+            setMatches([...prev, ...fresh]);
+            setChecked((c) => new Set([...c, ...fresh.map((x) => x.taskId)]));
             if (!m.length) setNote("Названия заданий не найдены. Сделай скриншот вкладки «Задачи» крупнее, без перекрытий.");
+            else if (prev.length) setNote(`Добавлено с этого снимка: ${fresh.length}. Список длиннее экрана — прокрути его в игре и распознай ещё раз.`);
         } catch (e) {
             if ((e as Error).name !== "NotAllowedError") setNote("Ошибка: " + (e as Error).message);
         } finally {
@@ -72,7 +75,7 @@ export default function QuestScan({ bundle, players, activePlayer, shotsDir, onA
             </div>
             <p className="hint">
                 Открой в игре список заданий (персонаж → «Задачи», режим «в процессе») и сделай снимок. Найденные квесты станут активными, а все квесты, без которых они бы не
-                открылись, — выполненными.
+                открылись, — выполненными. Список длиннее экрана — прокрути его и распознай ещё раз: найденное складывается.
             </p>
             <div className="row">
                 <button onClick={() => run(captureScreen)} disabled={!!busy}>
@@ -120,6 +123,15 @@ export default function QuestScan({ bundle, players, activePlayer, shotsDir, onA
                         ))}
                     </div>
                     <div className="row">
+                        <button
+                            className="link"
+                            onClick={() => {
+                                setMatches(undefined);
+                                setChecked(new Set());
+                            }}
+                        >
+                            очистить
+                        </button>
                         <select value={player} onChange={(e) => setPlayer(e.target.value)}>
                             {players.map((p) => (
                                 <option key={p.id} value={p.id}>
@@ -133,6 +145,7 @@ export default function QuestScan({ bundle, players, activePlayer, shotsDir, onA
                             onClick={() => {
                                 setNote(onApply(player, [...checked]));
                                 setMatches(undefined);
+                                setChecked(new Set());
                             }}
                         >
                             Отметить: {checked.size} активных, +{preview} выполненных

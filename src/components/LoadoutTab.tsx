@@ -27,6 +27,7 @@ function Section({ title, bundle, list, empty }: { title: string; bundle: Bundle
                             {n.count > 1 && <b> ×{n.count}</b>}
                             {n.fir && <span className="badge fir">FIR</span>}
                         </div>
+                        {n.given && <div className="muted">выдают при взятии квеста</div>}
                         {n.alternatives && <div className="muted">или любой из {n.alternatives.length - 1} других</div>}
                         <div className="reasons">
                             {n.reasons.map((r, i) => (

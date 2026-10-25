@@ -130,6 +130,15 @@ h3 { font-size: 12px; margin: 10px 0 2px; padding: 4px 8px; text-transform: uppe
 .obj-extra { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 4px; }
 .obj-check { display: inline-flex; gap: 3px; align-items: center; font-size: 12px; }
 .key-chip { display: inline-flex; align-items: center; gap: 2px; }
+.key-chip small, .start-item small { font-size: 11px; color: var(--dim); }
+.task-items { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px; font-size: 12px; }
+.start-item { display: inline-flex; align-items: center; gap: 2px; }
+.badge.story { color: #e3c96b; border-color: #6a5a28; }
+/* выбор квестов для плана */
+.pick-bar { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: 12px; }
+.seg button.story-only { margin-left: 6px; }
+.card-head input.pick { flex: none; margin: 0; width: 15px; height: 15px; accent-color: var(--tan); cursor: pointer; }
+.card.unpicked .card-title, .card.unpicked .trader { opacity: 0.45; }
 button.link { background: none; border: none; padding: 0 4px; color: var(--hi); text-decoration: underline; font-size: 12px; }
 
 /* ячейка предмета как в инвентаре */
@@ -254,6 +263,17 @@ body.pip .radar { width: 190px; height: 190px; }
 .stop.shared span { box-shadow: 0 0 0 2px #0b0c0a, 0 0 0 3px var(--fg); }
 .stop em { position: absolute; left: 50%; top: 27px; translate: -50% 0; display: flex; gap: 2px; font-style: normal; }
 .stop.done span { background: #1c2716; color: var(--green); border-color: var(--green); opacity: 0.7; }
+/* другие возможные места той же цели */
+.stop-alt span { display: grid; place-items: center; width: 22px; height: 16px; background: rgba(11, 12, 10, 0.75); border: 1.5px dashed var(--rc); border-radius: 2px; color: var(--rc); font-weight: 800; font-size: 9px; }
+.stop-alt.done span { opacity: 0.45; }
+/* группа мест одной цели: пунктир от основной метки, число мест на ней, подсветка при наведении */
+.alt-link { stroke-dasharray: 5 4; stroke-width: 2.2; stroke-opacity: 0.95; fill: none; filter: drop-shadow(0 0 1px #000); }
+.alt-link.done { stroke-opacity: 0.3; }
+path.alt-link.dim { stroke-opacity: 0.2; }
+.alt-link.alt-hl { stroke-width: 3; stroke-opacity: 1; stroke-dasharray: 5 3; }
+.stop .places { position: absolute; right: -8px; top: -8px; display: grid; place-items: center; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px; background: var(--rc); color: #0b0b09; font-size: 9px; font-weight: 800; box-shadow: 0 0 0 1.5px #0b0c0a; }
+.stop-alt.alt-hl span { background: var(--rc); color: #0b0b09; border-style: solid; }
+.stop.alt-hl span { box-shadow: 0 0 0 2px #0b0c0a, 0 0 0 4px var(--rc); }
 .stop.target span { background: var(--rc); color: #0b0b09; animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 #e3c96b99; } 50% { box-shadow: 0 0 0 8px #e3c96b00; } }
 .dim { opacity: 0.28; }

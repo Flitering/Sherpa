@@ -94,6 +94,11 @@ npm run dist          # установщик в release/
 `npm run desktop` — собрать и запустить без установщика; `npm run dev` — веб-версия на http://127.0.0.1:5173;
 `npm run sync -- pve` — обновить только PvE.
 
+`npm run sync:quests` — обновить `scripts/market-quests.json`: список квестов, которые сейчас есть в игре, по
+публичному API [tarkov-market](https://tarkov-market.com/ru/dev/api). По нему `npm run sync` убирает удалённые
+квесты и добавляет новые и сюжетные главы, которых ещё нет в tarkov.dev. Нужен ключ PRO-аккаунта в переменной
+`TARKOV_MARKET_KEY` или в файле `.tarkov-market-key` (он в `.gitignore`); в сборку ключ не попадает.
+
 В установленном приложении данные обновляются кнопкой «Обновить данные» на вкладке «Навигатор» — свежая копия
 кладётся в `%APPDATA%\Sherpa\content` и подменяет встроенную.
 
@@ -155,7 +160,8 @@ npm run dist          # установщик в release/
 | `electron/stylemaps.mjs`, `src/lib/styledMaps.ts` | Перекраска растровых карт (Лаборатория, Лабиринт, Ледокол) в стиль схем tarkov.dev |
 | `electron/updater.mjs` | Обновление по кнопке (GitHub Releases) |
 | `src/overlay/`, `src/components/MiniMap.tsx`, `src/lib/hudModel.ts` | Виджет поверх игры, миникарта, расчёт HUD |
-| `scripts/sync-data.mjs` | Качает `json.tarkov.dev/{regular,pve}/*`, конфиг карт tarkov-dev и SVG-карты; собирает `public/data/*.json` |
+| `scripts/sync-data.mjs` | Качает `json.tarkov.dev/{regular,pve}/*`, конфиг карт tarkov-dev и SVG-карты; сверяет квесты со списком tarkov-market; собирает `public/data/*.json` |
+| `scripts/sync-market-quests.mjs` | Список квестов из игры по API tarkov-market → `scripts/market-quests.json` |
 | `src/lib/crs.ts` | Перевод игровых координат в координаты карты (как на tarkov.dev) |
 | `src/lib/quests.ts` | Доступность квестов, цели на карте, расчёт снаряжения |
 | `src/lib/raids.ts` | Разбиение на рейды и оценка времени |
@@ -180,6 +186,7 @@ Sherpa — неофициальный бесплатный проект, не с
 ## Данные и лицензии
 
 - Данные квестов, предметов, цен и карт — [tarkov.dev](https://tarkov.dev) (the-hideout).
+- Список актуальных квестов и сюжетных глав — [tarkov-market.com](https://tarkov-market.com).
 - SVG-карты — [tarkov-dev-svg-maps](https://github.com/the-hideout/tarkov-dev-svg-maps), автор Shebuka и др.,
   **CC BY-NC-SA 4.0**: только некоммерческое использование, с указанием авторства. В репозиторий не входят —
   скачиваются командой `npm run sync`.

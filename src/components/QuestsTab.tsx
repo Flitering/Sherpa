@@ -1,7 +1,7 @@
 import { memo, useMemo } from "react";
 import { useSticky } from "../lib/sticky";
 import type { Bundle, Player, Task, TaskStatus, Vec3 } from "../types";
-import { isAvailable, objectivePoints, OBJECTIVE_LABEL, taskOnMap } from "../lib/quests";
+import { isAvailable, isPicked, isStoryTask, objectivePoints, OBJECTIVE_LABEL, taskOnMap, togglePick, type QuestPick } from "../lib/quests";
 import ItemIcon from "./ItemIcon";
 
 type Scope = "map" | "all";
@@ -27,7 +27,16 @@ interface Props {
     onFocus: (p: Vec3) => void;
     /** Показать точку маршрута этой цели на карте (выбрать рейд и построить подробный путь). */
     onPickStop: (objectiveId: string) => void;
+    /** Квесты, которые учитываются на карте, в рейдах и путях. */
+    pick?: QuestPick;
+    setPick: (p: QuestPick) => void;
 }
+
+const PRESETS: [QuestPick["base"], string][] = [
+    ["all", "Все"],
+    ["story", "Только сюжетные"],
+    ["none", "Не выбрано"],
+];
 
 const NEXT: Record<string, TaskStatus | undefined> = { none: "active", active: "done", done: undefined };
 const STATUS_TITLE = { none: "не взят", active: "активен", done: "выполнен" };
@@ -38,6 +47,7 @@ export default memo(QuestsTab);
 
 /** Условие открытия квеста вместо «ур. 0»: уровень, торговец, сюжет. */
 export function unlockText(task: Task, bundle: Bundle): string {
+    if (task.noData) return "условия пока неизвестны";
     const parts: string[] = [];
     if (task.minPlayerLevel > 0) parts.push(`ур. ${task.minPlayerLevel}`);
     for (const r of task.traderReq ?? []) {
@@ -54,6 +64,7 @@ function QuestsTab(props: Props) {
     const [scope, setScope] = useSticky<Scope>("quests.scope", "map");
     const [filter, setFilter] = useSticky<Filter>("quests.filter", "active");
     const [q, setQ] = useSticky("quests.q", "");
+    const [storyOnly, setStoryOnly] = useSticky("quests.storyOnly", false);
     const [open, setOpen] = useSticky<string | null>("quests.open", null);
     // длинный список рисуем частями — 500 карточек сразу заметно тормозят
     const [limit, setLimit] = useSticky("quests.limit", PAGE);
@@ -61,7 +72,9 @@ function QuestsTab(props: Props) {
     const list = useMemo(() => {
         const query = q.trim().toLowerCase();
         return bundle.tasks
-            .filter((t) => scope === "all" || taskOnMap(t, mapKey))
+            .filter((t) => !storyOnly || isStoryTask(t))
+            // у сюжетных глав пока нет целей на картах — при «Только сюжетные» показываем их и на вкладке карты
+            .filter((t) => scope === "all" || taskOnMap(t, mapKey) || (storyOnly && !t.map && !t.objectives.length))
             .filter((t) => {
                 if (filter === "all") return true;
                 if (filter === "active") return players.some((p) => p.tasks[t.id] === "active");
@@ -69,7 +82,10 @@ function QuestsTab(props: Props) {
             })
             .filter((t) => !query || t.name.toLowerCase().includes(query) || bundle.traders[t.trader]?.name.toLowerCase().includes(query))
             .sort((a, b) => a.minPlayerLevel - b.minPlayerLevel || a.name.localeCompare(b.name));
-    }, [bundle, players, scope, filter, q, mapKey]);
+    }, [bundle, players, scope, filter, q, mapKey, storyOnly]);
+    const pickedCount = useMemo(() => bundle.tasks.filter((t) => isPicked(t, props.pick)).length, [bundle, props.pick]);
+    const pickBase = props.pick?.base ?? "all";
+    const pickPure = !props.pick || (!props.pick.on.length && !props.pick.off.length);
 
     return (
         <div className="tab">
@@ -81,6 +97,23 @@ function QuestsTab(props: Props) {
                 <button className={filter === "active" ? "on" : ""} onClick={() => setFilter("active")}>Активные</button>
                 <button className={filter === "available" ? "on" : ""} onClick={() => setFilter("available")}>Доступные</button>
                 <button className={filter === "all" ? "on" : ""} onClick={() => setFilter("all")}>Все</button>
+                {/* отдельный переключатель: сужает любой из фильтров выше */}
+                <button className={"story-only" + (storyOnly ? " on" : "")} title="Показывать только сюжетные главы" onClick={() => setStoryOnly(!storyOnly)}>
+                    Только сюжетные
+                </button>
+            </div>
+            <div className="pick-bar" title="Только выбранные квесты показываются на карте, в рейдах и путях">
+                <span className="muted">В плане:</span>
+                <div className="seg">
+                    {PRESETS.map(([base, label]) => (
+                        <button key={base} className={pickPure && pickBase === base ? "on" : ""} onClick={() => props.setPick({ base, on: [], off: [] })}>
+                            {label}
+                        </button>
+                    ))}
+                </div>
+                <span className="muted">
+                    {pickedCount} из {bundle.tasks.length}
+                </span>
             </div>
             {props.scan}
             <input className="search" placeholder="Поиск по названию или торговцу" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -94,7 +127,15 @@ function QuestsTab(props: Props) {
             </div>
             {list.length === 0 && <p className="empty">{filter === "active" ? "Нет активных квестов. Переключись на «Доступные» и отметь взятые." : "Ничего не найдено."}</p>}
             {list.slice(0, limit).map((t) => (
-                <TaskCard key={t.id} task={t} {...props} open={open === t.id} onToggle={() => setOpen(open === t.id ? null : t.id)} />
+                <TaskCard
+                    key={t.id}
+                    task={t}
+                    {...props}
+                    open={open === t.id}
+                    onToggle={() => setOpen(open === t.id ? null : t.id)}
+                    picked={isPicked(t, props.pick)}
+                    onTogglePick={() => props.setPick(togglePick(t, props.pick))}
+                />
             ))}
             {list.length > limit && (
                 <button className="wide" onClick={() => setLimit(limit + PAGE)}>
@@ -105,23 +146,52 @@ function QuestsTab(props: Props) {
     );
 }
 
-function TaskCard({ task, bundle, players, mapKey, open, onToggle, setTaskStatus, toggleObjective, onFocus, stopLabels, onPickStop }: Props & { task: Task; open: boolean; onToggle: () => void }) {
+function TaskCard({
+    task,
+    bundle,
+    players,
+    mapKey,
+    open,
+    onToggle,
+    setTaskStatus,
+    toggleObjective,
+    onFocus,
+    stopLabels,
+    onPickStop,
+    picked,
+    onTogglePick,
+}: Props & { task: Task; open: boolean; onToggle: () => void; picked: boolean; onTogglePick: () => void }) {
     const trader = bundle.traders[task.trader];
     const mapName = task.map ? bundle.maps.find((m) => m.key === task.map)?.name : undefined;
     const labels = task.objectives.map((o) => stopLabels.get(o.id)).filter(Boolean) as StopLabel[];
+    // ключи квеста, которых нет в самих целях (там они показаны у цели)
+    const objKeys = new Set(task.objectives.flatMap((o) => o.keys?.flat() ?? []));
+    const keys = task.neededKeys.filter((k) => !k.keys.every((id) => objKeys.has(id)));
+    // выданные ключи уже показаны среди ключей
+    const givenKeys = new Set(task.neededKeys.filter((k) => k.given).flatMap((k) => k.keys));
+    const startItems = (task.startItems ?? []).filter((s) => !givenKeys.has(s.item));
     const prereq = task.requires
         .filter((r) => r.status.includes("complete"))
         .map((r) => bundle.tasks.find((t) => t.id === r.task)?.name)
         .filter(Boolean);
     return (
-        <article className={"card" + (open ? " open" : "")}>
+        <article className={"card" + (open ? " open" : "") + (picked ? "" : " unpicked")}>
             <div className="card-head" onClick={onToggle}>
+                <input
+                    type="checkbox"
+                    className="pick"
+                    checked={picked}
+                    title={picked ? "В плане: квест на карте, в рейдах и путях — нажми, чтобы убрать" : "Не в плане — нажми, чтобы показывать на карте, в рейдах и путях"}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={onTogglePick}
+                />
                 {trader?.image && <img className="trader" src={trader.image} alt="" referrerPolicy="no-referrer" />}
                 <div className="card-title">
                     <div className="name">{task.name}</div>
                     <div className="meta">
-                        {trader?.name} · {unlockText(task, bundle)}
+                        {trader?.name ?? (task.chapter ? "Сюжет" : "")} · {unlockText(task, bundle)}
                         {mapName && ` · ${mapName}`}
+                        {task.chapter && <span className="badge story">Сюжет</span>}
                         {task.kappa && <span className="badge">Каппа</span>}
                         {task.lightkeeper && <span className="badge lk">Смотритель</span>}
                     </div>
@@ -157,6 +227,33 @@ function TaskCard({ task, bundle, players, mapKey, open, onToggle, setTaskStatus
                 <div className="card-body">
                     {task.image && <img className="task-image" src={task.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}
                     {prereq.length > 0 && <div className="hint">Открывается после: {prereq.join(", ")}</div>}
+                    {task.noData && (
+                        <div className="hint">
+                            Квест есть в игре (по списку tarkov-market), но tarkov.dev ещё не опубликовал его цели — на карте его пока не показать.
+                        </div>
+                    )}
+                    {keys.length > 0 && (
+                        <div className="task-items">
+                            <span className="muted">Ключи:</span>
+                            {keys.map((k) => (
+                                <span key={k.keys.join("|")} className="key-chip" title={k.given ? "Выдают при взятии квеста — не забудь взять в рейд" : undefined}>
+                                    🔑 {k.keys.map((id) => <ItemIcon key={id} bundle={bundle} id={id} size={24} />)}
+                                    {k.given && <small>выдают</small>}
+                                </span>
+                            ))}
+                        </div>
+                    )}
+                    {startItems.length > 0 && (
+                        <div className="task-items">
+                            <span className="muted">Выдают при взятии:</span>
+                            {startItems.map((s) => (
+                                <span key={s.item} className="start-item">
+                                    <ItemIcon bundle={bundle} id={s.item} size={28} />
+                                    {s.count > 1 && <small>×{s.count}</small>}
+                                </span>
+                            ))}
+                        </div>
+                    )}
                     <ul className="objectives">
                         {task.objectives.map((o) => {
                             const pts = objectivePoints(o, mapKey);

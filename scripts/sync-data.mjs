@@ -8,7 +8,7 @@
 //
 // Скрипт только читает публичные данные из интернета. С игрой и её файлами не взаимодействует.
 
-import { mkdir, writeFile, access } from "node:fs/promises";
+import { mkdir, writeFile, readFile, access } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -49,6 +49,84 @@ async function getText(url) {
 }
 
 const exists = (p) => access(p).then(() => true, () => false);
+
+/** Список квестов из игры по tarkov-market (scripts/market-quests.json, npm run sync:quests). */
+async function loadMarketQuests() {
+    try {
+        return JSON.parse(await readFile(join(ROOT, "scripts", "market-quests.json"), "utf8"));
+    } catch {
+        return null;
+    }
+}
+
+/** Ручные дополнения к данным tarkov.dev (scripts/quest-overrides.json): например, недостающие места появления предметов. */
+async function loadOverrides() {
+    try {
+        return JSON.parse(await readFile(join(ROOT, "scripts", "quest-overrides.json"), "utf8"));
+    } catch {
+        return null;
+    }
+}
+
+/** Добавить места целей из дополнений; точки ближе 3 м к уже известным пропускаются. Возвращает число добавленных. */
+function applyOverrides(outTasks, overrides) {
+    let added = 0;
+    for (const t of outTasks) {
+        for (const o of t.objectives) {
+            const ov = overrides?.objectives?.[o.id];
+            if (!ov) continue;
+            for (const add of ov.addLocations ?? []) {
+                const known = (o.locations ?? []).filter((l) => l.map === add.map).flatMap((l) => l.positions);
+                const fresh = add.positions.map(pos).filter((p) => !known.some((k) => Math.hypot(k.x - p.x, k.z - p.z) < 3));
+                if (!fresh.length) continue;
+                o.locations = [...(o.locations ?? []), { map: add.map, positions: fresh, approx: add.approx || undefined }];
+                if (!o.maps.includes(add.map)) o.maps.push(add.map);
+                added += fresh.length;
+            }
+        }
+    }
+    return added;
+}
+
+/**
+ * Сверка с tarkov-market: убрать квесты, которых больше нет в игре, и добавить те, о которых tarkov.dev
+ * ещё не знает (новые и сюжетные главы) — без целей, только название и торговец.
+ */
+function reconcileTasks(outTasks, list, outTraders) {
+    if (!list?.length) return { tasks: outTasks, removed: [], added: [] };
+    const known = new Set(list.flatMap(([id, aliases]) => [id, ...aliases]));
+    const removed = outTasks.filter((t) => !known.has(t.id));
+    const gone = new Set(removed.map((t) => t.id));
+    const tasks = outTasks
+        .filter((t) => !gone.has(t.id))
+        // условие «выполнить удалённый квест» больше не выполнить — иначе квест никогда не откроется
+        .map((t) => (t.requires.some((r) => gone.has(r.task)) ? { ...t, requires: t.requires.filter((r) => !gone.has(r.task)) } : t));
+    const have = new Set(tasks.map((t) => t.id));
+    const traderByKey = Object.fromEntries(Object.entries(outTraders).map(([id, t]) => [t.key, id]));
+    const added = [];
+    for (const [id, aliases, name, trader] of list) {
+        if (have.has(id) || aliases.some((a) => have.has(a))) continue;
+        const traderKey = trader.toLowerCase().replace(/\s+/g, "-");
+        added.push({
+            id,
+            name,
+            trader: traderByKey[traderKey] ?? "",
+            map: null,
+            minPlayerLevel: 0,
+            traderReq: [],
+            chapter: !trader || undefined,
+            noData: true,
+            kappa: false,
+            lightkeeper: traderKey === "lightkeeper",
+            faction: "Any",
+            experience: 0,
+            requires: [],
+            neededKeys: [],
+            objectives: [],
+        });
+    }
+    return { tasks: [...tasks, ...added], removed, added };
+}
 
 /** Перевод строки: сначала ru, затем en, затем сам ключ. */
 function translator(...dicts) {
@@ -140,7 +218,7 @@ async function downloadSvgs(files) {
 
 // ---------- сборка пакета для режима ----------
 
-async function buildMode(mode, mapConfigs) {
+async function buildMode(mode, mapConfigs, marketQuests, overrides) {
     const get = (name) => getJson(`${JSON_BASE}/${mode}/${name}`);
     CFG.log(`[${mode}] скачиваю данные…`);
     const [tasks, tasksRu, tasksEn, maps, mapsRu, mapsEn, items, itemsRu, itemsEn, traders, tradersRu, tradersEn] =
@@ -242,7 +320,27 @@ async function buildMode(mode, mapConfigs) {
         });
     };
 
-    const outTasks = Object.values(tasks.data.tasks).map((t) => ({
+    const isKey = (id) => !!items.data.items[id]?.types?.includes("keys");
+    /** Карта квеста: указанная или единственная карта его целей. */
+    const taskMap = (t) => {
+        if (mapIdToKey[t.map]) return mapIdToKey[t.map];
+        const maps = new Set(t.objectives.flatMap((o) => (o.maps ?? []).map((m) => mapIdToKey[m]).filter(Boolean)));
+        return maps.size === 1 ? [...maps][0] : undefined;
+    };
+    /** Ключи нужных карт + ключи, которые выдают при взятии квеста (их тоже надо взять в рейд). */
+    const neededKeys = (t) => {
+        const out = (t.neededKeys ?? []).map((k) => ({ map: mapIdToKey[k.map], keys: k.keys.map(useItem) }));
+        const have = new Set([...out.flatMap((k) => k.keys), ...t.objectives.flatMap((o) => (o.requiredKeys ?? []).flat())]);
+        const map = taskMap(t);
+        for (const r of t.startRewards?.items ?? []) {
+            if (!isKey(r.item) || have.has(r.item)) continue;
+            out.push({ map, keys: [useItem(r.item)], given: true });
+            have.add(r.item);
+        }
+        return out;
+    };
+
+    let outTasks = Object.values(tasks.data.tasks).map((t) => ({
         id: t.id,
         name: tt(t.name),
         trader: t.trader,
@@ -258,7 +356,9 @@ async function buildMode(mode, mapConfigs) {
         image: t.taskImageLink,
         experience: t.experience,
         requires: (t.taskRequirements ?? []).map((r) => ({ task: r.task, status: r.status })),
-        neededKeys: (t.neededKeys ?? []).map((k) => ({ map: mapIdToKey[k.map], keys: k.keys.map(useItem) })),
+        neededKeys: neededKeys(t),
+        // выдаётся при взятии квеста
+        startItems: t.startRewards?.items?.length ? t.startRewards.items.map((r) => ({ item: useItem(r.item), count: r.count })) : undefined,
         objectives: t.objectives.map((o) => {
             const obj = {
                 id: o.id,
@@ -322,11 +422,18 @@ async function buildMode(mode, mapConfigs) {
         Object.values(traders.data).map((t) => [t.id, { name: trt(t.name), key: t.normalizedName, image: t.imageLink ?? t.image4xLink }]),
     );
 
+    const extra = applyOverrides(outTasks, overrides);
+    if (extra) CFG.log(`[${mode}] дополнения (scripts/quest-overrides.json): мест целей +${extra}`);
+    const rec = reconcileTasks(outTasks, marketQuests?.modes?.[mode], outTraders);
+    outTasks = rec.tasks;
+    if (marketQuests) CFG.log(`[${mode}] сверка с tarkov-market: убрано ${rec.removed.length}, добавлено без целей ${rec.added.length}`);
+
     const bundle = {
         mode,
         lang: LANG,
         generatedAt: new Date().toISOString(),
-        source: "tarkov.dev (json.tarkov.dev), карты — tarkov-dev-svg-maps (CC BY-NC-SA 4.0)",
+        source: "tarkov.dev (json.tarkov.dev), список квестов — tarkov-market.com, карты — tarkov-dev-svg-maps (CC BY-NC-SA 4.0)",
+        questsCheckedAt: marketQuests?.generatedAt,
         maps: outMaps,
         tasks: outTasks,
         items: outItems,
@@ -380,7 +487,10 @@ export async function syncData(opts = {}) {
     const { configs, svgFiles } = await loadMapConfigs();
     CFG.log(`Конфигурация карт: ${configs.length}`);
     await downloadSvgs(svgFiles);
-    for (const mode of modes) await buildMode(mode, configs);
+    const marketQuests = await loadMarketQuests();
+    if (!marketQuests) CFG.log("Нет scripts/market-quests.json — квесты не сверяются с tarkov-market (npm run sync:quests)");
+    const overrides = await loadOverrides();
+    for (const mode of modes) await buildMode(mode, configs, marketQuests, overrides);
     CFG.log("Готово.");
 }
 

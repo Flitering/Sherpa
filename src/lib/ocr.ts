@@ -124,6 +124,7 @@ export function matchTasks(bundle: Bundle, text: string, threshold = 0.84): Task
     // длинные названия первыми: «Инвентаризация. Часть 2» важнее «Инвентаризация»
     const tasks = [...bundle.tasks].sort((a, b) => b.name.length - a.name.length);
     const usedLines = new Map<number, string[]>(); // строка → уже найденные в ней (более длинные) названия
+    const hits: { li: number; name: string; score: number; m: TaskMatch }[] = [];
     for (const t of tasks) {
         const name = normalize(t.name);
         if (name.length < 4) continue;
@@ -133,10 +134,16 @@ export function matchTasks(bundle: Bundle, text: string, threshold = 0.84): Task
             // «Инвентаризация» не считается, если в строке уже найдена «Инвентаризация. Часть 2»
             const taken = usedLines.get(li) ?? [];
             if (taken.some((longer) => longer !== name && longer.includes(name))) return;
-            const prev = best.get(t.id);
-            if (!prev || score > prev.score) best.set(t.id, { taskId: t.id, name: t.name, score, line });
+            hits.push({ li, name, score, m: { taskId: t.id, name: t.name, score, line } });
             usedLines.set(li, [...taken, name]);
         });
+    }
+    // В строке точно прочитано «Стрим. Часть 2» — похожие «Стрим. Часть 1/3/4…» там же это не они, а одна цифра разницы
+    const exact = hits.filter((h) => h.score === 1);
+    for (const h of hits) {
+        if (h.score < 1 && exact.some((e) => e.li === h.li && similarity(e.name, h.name) >= 0.8)) continue;
+        const prev = best.get(h.m.taskId);
+        if (!prev || h.score > prev.score) best.set(h.m.taskId, h.m);
     }
     // одинаковые названия (разные фракции и т.п.) — оставляем все, пользователь снимет лишнее
     return [...best.values()].sort((a, b) => b.score - a.score);

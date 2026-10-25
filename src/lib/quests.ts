@@ -24,6 +24,38 @@ export const OBJECTIVE_LABEL: Record<string, string> = {
     dialogue: "Диалог",
 };
 
+// ---------- выбор квестов для плана ----------
+
+/**
+ * Какие квесты учитываются на карте, в рейдах и путях: правило пресета плюс ручные исключения.
+ * Хранится правилом, а не списком id — новые квесты после обновления данных попадают в выбор сами.
+ */
+export interface QuestPick {
+    base: "all" | "story" | "none";
+    /** Включены вручную поверх пресета. */
+    on: string[];
+    /** Выключены вручную. */
+    off: string[];
+}
+
+export const PICK_ALL: QuestPick = { base: "all", on: [], off: [] };
+
+export const isStoryTask = (t: Task) => !!t.chapter;
+
+export function isPicked(t: Task, pick: QuestPick = PICK_ALL): boolean {
+    if (pick.off.includes(t.id)) return false;
+    if (pick.on.includes(t.id)) return true;
+    return pick.base === "all" || (pick.base === "story" && isStoryTask(t));
+}
+
+export function togglePick(t: Task, pick: QuestPick = PICK_ALL): QuestPick {
+    const on = pick.on.filter((id) => id !== t.id);
+    const off = pick.off.filter((id) => id !== t.id);
+    if (isPicked(t, pick)) off.push(t.id);
+    else on.push(t.id);
+    return { ...pick, on, off };
+}
+
 export function statusOf(p: Player, taskId: string) {
     return p.tasks[taskId];
 }
@@ -48,10 +80,10 @@ export function taskOnMap(task: Task, mapKey: string): boolean {
 }
 
 /** Точки цели на карте. Любая из них подходит (альтернативы). */
-export function objectivePoints(o: Objective, mapKey: string): { position: Vec3; outline?: [number, number][]; top?: number; bottom?: number; kind: "zone" | "item" }[] {
+export function objectivePoints(o: Objective, mapKey: string): { position: Vec3; outline?: [number, number][]; top?: number; bottom?: number; kind: "zone" | "item"; approx?: boolean }[] {
     const out: ReturnType<typeof objectivePoints> = [];
     for (const z of o.zones ?? []) if (z.map === mapKey) out.push({ ...z, kind: "zone" });
-    for (const l of o.locations ?? []) if (l.map === mapKey) for (const p of l.positions) out.push({ position: p, kind: "item" });
+    for (const l of o.locations ?? []) if (l.map === mapKey) for (const p of l.positions) out.push({ position: p, kind: "item", approx: l.approx });
     return out;
 }
 
@@ -90,6 +122,8 @@ export interface NeedEntry {
     alternatives?: string[];
     count: number;
     fir: boolean;
+    /** Ключ выдают при взятии квеста — его не нужно искать, только не забыть взять. */
+    given?: boolean;
     reasons: { task: Task; objective?: Objective; players: Player[] }[];
 }
 
@@ -160,7 +194,7 @@ export function loadout(bundle: Bundle, players: Player[], mapKey: string): Load
         for (const nk of task.neededKeys) {
             if (nk.map !== mapKey) continue;
             const k = nk.keys.join("|");
-            if (!keys.has(k)) add(keys, k, { itemId: nk.keys[0], alternatives: nk.keys.length > 1 ? nk.keys : undefined, count: 1, fir: false }, { task, players: owners });
+            if (!keys.has(k)) add(keys, k, { itemId: nk.keys[0], alternatives: nk.keys.length > 1 ? nk.keys : undefined, count: 1, fir: false, given: nk.given }, { task, players: owners });
         }
     }
     const sort = (m: Map<string, NeedEntry>) => [...m.values()].sort((a, b) => (bundle.items[a.itemId]?.name ?? "").localeCompare(bundle.items[b.itemId]?.name ?? ""));
