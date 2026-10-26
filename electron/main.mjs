@@ -12,7 +12,7 @@
 // С процессом игры приложение не взаимодействует: не читает память, не внедряется,
 // не нажимает клавиши. Сочетания клавиш регистрируются в Windows, а не в игре.
 
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, net, Notification, protocol, shell, screen, Tray } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, net, Notification, protocol, safeStorage, shell, screen, Tray } from "electron";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -68,6 +68,7 @@ let settings = {
     paths: { screenshots: null, logs: null },
     prefs: { closeToTray: true },
     hotkeys: {}, // переназначенные сочетания: действие → «Ctrl+Shift+P», "" — выключено
+    tmKey: null, // API-ключ tarkov-market, зашифрованный safeStorage (base64)
 };
 try {
     const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
@@ -79,6 +80,47 @@ let saveTimer = null;
 function saveSettings() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => fsp.mkdir(USER, { recursive: true }).then(() => fsp.writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2))).catch(() => {}), 400);
+}
+
+// ---------------- ключ tarkov-market ----------------
+
+function tmKey() {
+    if (!settings.tmKey) return null;
+    try {
+        return safeStorage.decryptString(Buffer.from(settings.tmKey, "base64"));
+    } catch {
+        return null; // профиль Windows сменился — ключ придётся ввести заново
+    }
+}
+
+const MARKET_QUESTS_FILE = () => path.join(USER_DATA, "market-quests.json");
+function marketQuestsCachedAt() {
+    try {
+        return JSON.parse(fs.readFileSync(MARKET_QUESTS_FILE(), "utf8")).generatedAt ?? null;
+    } catch {
+        return null;
+    }
+}
+
+/** Список квестов tarkov-market для обновления данных: свежий (есть ключ), прошлый скачанный или встроенный (undefined). */
+async function freshMarketQuests(log) {
+    const key = tmKey();
+    if (key) {
+        try {
+            const { fetchMarketQuests } = await import(pathToFileURL(path.join(ROOT, "scripts", "sync-market-quests.mjs")).href);
+            const list = await fetchMarketQuests({ key, fetch: (u, i) => net.fetch(u, i), log });
+            await fsp.mkdir(USER_DATA, { recursive: true });
+            await fsp.writeFile(MARKET_QUESTS_FILE(), JSON.stringify(list));
+            return list;
+        } catch (err) {
+            log("Список квестов tarkov-market не обновлён: " + err.message);
+        }
+    }
+    try {
+        return JSON.parse(await fsp.readFile(MARKET_QUESTS_FILE(), "utf8"));
+    } catch {
+        return undefined;
+    }
 }
 
 // ---------------- протокол app:// — интерфейс и данные ----------------
@@ -657,7 +699,9 @@ function registerIpc() {
     async function runSync(e, modes) {
         const send = (m) => e.sender.send("data:progress", m);
         const { syncData } = await import(pathToFileURL(path.join(ROOT, "scripts", "sync-data.mjs")).href);
+        const marketQuests = await freshMarketQuests(send);
         await syncData({
+            marketQuests,
             outData: path.join(USER_DATA, "data"),
             outSvg: path.join(USER_DATA, "maps", "svg"),
             modes,
@@ -674,6 +718,27 @@ function registerIpc() {
         return settings.lastSync;
     }
     handle("data:info", MAIN, () => ({ lastSync: settings.lastSync ?? null, hasUserData: exists(path.join(USER_DATA, "data", "regular.json")) }));
+
+    // API-ключ tarkov-market: в окно не возвращается — только «задан» и последние символы
+    handle("tm:info", MAIN, () => {
+        const key = tmKey();
+        return { set: !!key, tail: key ? key.slice(-4) : null, canEncrypt: safeStorage.isEncryptionAvailable(), questsAt: marketQuestsCachedAt() };
+    });
+    handle("tm:set", MAIN, async (_e, key) => {
+        if (key === null) {
+            settings.tmKey = null;
+            saveSettings();
+            return { characters: [] };
+        }
+        if (typeof key !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(key.trim())) throw new Error("Ключ выглядит неправильно: латинские буквы и цифры, 16–128 символов");
+        if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows не даёт зашифровать ключ — сохранить его нельзя");
+        const { marketCharacters } = await import(pathToFileURL(path.join(ROOT, "scripts", "sync-market-quests.mjs")).href);
+        // сначала проверка ключа: в настройки попадает только рабочий
+        const characters = await marketCharacters({ key: key.trim(), fetch: (u, i) => net.fetch(u, i) });
+        settings.tmKey = safeStorage.encryptString(key.trim()).toString("base64");
+        saveSettings();
+        return { characters };
+    });
 
     // горячие клавиши
     const sendHotkeys = () => broadcast("hotkeys:state", hotkeysState());

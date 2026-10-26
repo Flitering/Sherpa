@@ -56,6 +56,8 @@ export interface HudModel {
     objText?: string;
     players: { name: string; color: string }[];
     hasTarget: boolean;
+    /** У цели несколько мест: можно отметить «здесь нет». left — сколько мест осталось, empty — сколько уже пустых. */
+    spots?: { left: number; empty: number };
     fix?: { x: number; y: number; z: number; heading?: number; time: number };
     distance?: number;
     arrowDeg?: number;
@@ -81,6 +83,8 @@ export interface HudInput {
     guide?: { points: [number, number][]; length: number; detail?: DetailRoute };
     screenshotKey: string;
     now: number;
+    /** Места, отмеченные «здесь нет» в этом рейде: id точки маршрута → число. */
+    emptied?: Record<string, number>;
 }
 
 export function computeHud(inp: HudInput): HudModel {
@@ -151,6 +155,10 @@ export function computeHud(inp: HudInput): HudModel {
         objText: target?.stop.objective.text,
         players: target ? target.stop.players.map((p) => ({ name: p.name, color: p.color })) : [],
         hasTarget: !!target,
+        spots:
+            target && (target.stop.points.length > 1 || inp.emptied?.[target.stop.id])
+                ? { left: target.stop.points.length, empty: inp.emptied?.[target.stop.id] ?? 0 }
+                : undefined,
         fix: fix ? { ...fix.position, heading: fix.heading, time: fix.time } : undefined,
         distance,
         arrowDeg,

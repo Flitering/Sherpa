@@ -164,7 +164,7 @@ function Offer({ offer, act }: { offer: RaidOffer; act: (a: Parameters<NonNullab
     );
 }
 
-function HudView({ hud, now, view, setRadius, act }: { hud: HudModel; now: number; view: View; setRadius: (r: number) => void; act: (a: { type: "done" } | { type: "skip" } | { type: "stop" }) => void }) {
+function HudView({ hud, now, view, setRadius, act }: { hud: HudModel; now: number; view: View; setRadius: (r: number) => void; act: (a: { type: "done" } | { type: "skip" } | { type: "empty" } | { type: "stop" }) => void }) {
     const age = hud.fix ? Math.round((now - hud.fix.time) / 1000) : undefined;
     return (
         <>
@@ -213,6 +213,12 @@ function HudView({ hud, now, view, setRadius, act }: { hud: HudModel; now: numbe
                     {hud.behindMin > 0 && <span className="late"> · отстаём на {hud.behindMin} мин</span>}
                 </div>
                 <div className="ov-goal">{hud.goalName}</div>
+                {hud.spots && (
+                    <div className="ov-spots">
+                        мест осталось: {hud.spots.left}
+                        {hud.spots.empty > 0 && ` · пустых: ${hud.spots.empty}`}
+                    </div>
+                )}
                 {!view.compact && hud.objText && (
                     <div className="ov-obj">
                         <b>{hud.objType}</b> {hud.objText}
@@ -231,6 +237,11 @@ function HudView({ hud, now, view, setRadius, act }: { hud: HudModel; now: numbe
                     {hud.hasTarget && (
                         <button className="primary" onClick={() => act({ type: "done" })} title="Ctrl+Shift+D">
                             ✓ Выполнено
+                        </button>
+                    )}
+                    {hud.spots && (
+                        <button onClick={() => act({ type: "empty" })} title="Предмета здесь нет — к следующему возможному месту">
+                            ✗ Здесь нет
                         </button>
                     )}
                     {hud.hasTarget && !view.compact && (

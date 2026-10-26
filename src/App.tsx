@@ -4,7 +4,7 @@ import type { Bundle, GameMode, Player, Task, TaskStatus, Vec3 } from "./types";
 import { usePersistentState } from "./lib/store";
 import { activeStops, isPicked, loadout, objectivePoints, taskOnMap, type QuestPick } from "./lib/quests";
 import { readExtractsFromShot } from "./lib/extractOcr";
-import { DEFAULT_RAID_SETTINGS, planRaids, planWithSpawn, type Raid, type RaidPlan, type RaidSettings, type RaidStep } from "./lib/raids";
+import { DEFAULT_RAID_SETTINGS, dropSpot, planRaids, planWithSpawn, type Raid, type RaidPlan, type RaidSettings, type RaidStep } from "./lib/raids";
 import { refineRaids } from "./lib/realRoutes";
 import { loadSvgText, useNavGrid } from "./lib/useNavGrid";
 import { useSticky } from "./lib/sticky";
@@ -29,6 +29,7 @@ import RaidsTab from "./components/RaidsTab";
 import LoadoutTab from "./components/LoadoutTab";
 import PlayersTab from "./components/PlayersTab";
 import NavigatorTab, { type NavLink } from "./components/NavigatorTab";
+import SettingsTab from "./components/SettingsTab";
 import SetupWizard from "./components/SetupWizard";
 import RaidPrompt from "./components/RaidPrompt";
 import Hud, { type Session } from "./components/Hud";
@@ -39,7 +40,7 @@ import { hideTip, loadMarket, MarketContext, refreshMarket, showTip, type Market
 import { scanTaskHistory, watchLogs, type LogState } from "./lib/gamelogs";
 import { applyActiveList, applyTaskEvents, type SyncSummary } from "./lib/progressSync";
 
-type Tab = "quests" | "raids" | "loadout" | "market" | "nav" | "players";
+type Tab = "quests" | "raids" | "loadout" | "market" | "nav" | "players" | "settings";
 type Which = "shots" | "logs";
 
 /** Короткий сигнал о начале рейда. */
@@ -284,6 +285,31 @@ export default function App() {
     };
     const markDone = () => target && setObjective(target.stop.players.map((p) => p.id), target.stop.objective.id, true);
     const skip = () => target && setSession((s) => (s ? { ...s, skipped: [...s.skipped, target.stop.id] } : s));
+    /**
+     * Предмета на месте нет: убрать это место и перестроить остаток маршрута от игрока.
+     * Без аргументов — место текущей цели (кнопка в HUD); с аргументами — любое место на карте:
+     * игрок мог свернуть с маршрута и проверить другое место по пути.
+     */
+    const markEmpty = (stopId?: string, point?: Vec3) => {
+        const id = stopId ?? target?.stop.id;
+        const spot = point ?? target?.point;
+        if (!id || !spot) return;
+        const from = fix && fix.mapKey === mapKey ? fix.position : undefined;
+        setSession((s) => {
+            if (!s) return s;
+            const pending = (st: RaidStep) => !isDone(st) && !s.skipped.includes(st.stop.id);
+            const step = s.raid.steps.find((st) => st.stop.id === id);
+            if (!step || !pending(step)) return s;
+            const r = dropSpot(s.raid, id, spot, pending, raidSettings, from);
+            return {
+                ...s,
+                raid: r.raid,
+                // мест не осталось — цель в этом рейде не выполнить
+                skipped: r.exhausted ? [...s.skipped, id] : s.skipped,
+                emptied: { ...s.emptied, [id]: (s.emptied?.[id] ?? 0) + 1 },
+            };
+        });
+    };
 
 
     // ---------- рейд по логам ----------
@@ -640,6 +666,7 @@ export default function App() {
                 extract={session.raid.extract}
                 onDone={markDone}
                 onSkip={skip}
+                onEmpty={() => markEmpty()}
                 onStop={stopRaid}
                 raidStartFromLog={logState?.raidStart}
                 guide={guide}
@@ -659,7 +686,19 @@ export default function App() {
             const timerStart = logStart && logStart > session.startedAt - 10 * 60_000 ? logStart : session.startedAt;
             m = {
                 kind: "hud",
-                hud: computeHud({ map: gameMap, raid: session.raid, timerStart, fix: visibleFix, target, remaining, extract: session.raid.extract, guide, screenshotKey, now: Date.now() }),
+                hud: computeHud({
+                    map: gameMap,
+                    raid: session.raid,
+                    timerStart,
+                    fix: visibleFix,
+                    target,
+                    remaining,
+                    extract: session.raid.extract,
+                    guide,
+                    screenshotKey,
+                    now: Date.now(),
+                    emptied: session.emptied,
+                }),
             };
         } else if (showRaidPrompt && gameMap && raidStartLog) {
             m = { kind: "offer", offer: raidOffer(gameMap.name, raidStartLog, plan.raids, offerDefault, offerNote) };
@@ -673,6 +712,7 @@ export default function App() {
     actionRef.current = (a) => {
         if (a.type === "done") markDone();
         else if (a.type === "skip") skip();
+        else if (a.type === "empty") markEmpty();
         else if (a.type === "stop") stopRaid();
         else if (a.type === "start") {
             if (raidStartLog) setPromptedRaid(raidStartLog);
@@ -750,7 +790,7 @@ export default function App() {
                                 key={w}
                                 className={"conn-chip " + l.status}
                                 title={hint}
-                                onClick={() => (l.status === "need-permission" ? connect(w) : l.status !== "on" ? setShowSetup(true) : setTab("nav"))}
+                                onClick={() => (l.status === "need-permission" ? connect(w) : l.status !== "on" ? setShowSetup(true) : setTab("settings"))}
                             >
                                 <span className="led" />
                                 {label}
@@ -762,7 +802,7 @@ export default function App() {
                 </div>
                 <UpdateBadge />
                 <button className="setup-btn" onClick={() => setShowSetup(true)} title="Первая настройка: папки игры, виджет, группа">
-                    ⚙ Настройка
+                    Мастер настройки
                 </button>
                 <WindowControls />
             </header>
@@ -791,6 +831,7 @@ export default function App() {
                             onTakeTask={takeTask}
                             focus={focus}
                             onSelectStop={onSelectStop}
+                            onMarkEmpty={session ? markEmpty : undefined}
                             showHazards={showHazards}
                             availableExtracts={allowedExtracts}
                         />
@@ -838,9 +879,16 @@ export default function App() {
                                     ["market", "Барахолка"],
                                     ["nav", session ? "● Навигатор" : "Навигатор"],
                                     ["players", "Группа"],
+                                    ["settings", "⚙"],
                                 ] as [Tab, string][]
                             ).map(([k, label]) => (
-                                <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>
+                                <button
+                                    key={k}
+                                    className={(tab === k ? "on" : "") + (k === "settings" ? " tab-icon" : "")}
+                                    title={k === "settings" ? "Настройки" : undefined}
+                                    aria-label={k === "settings" ? "Настройки" : undefined}
+                                    onClick={() => setTab(k)}
+                                >
                                     {label}
                                 </button>
                             ))}
@@ -920,11 +968,7 @@ export default function App() {
                                     <NavigatorTab
                                         shots={links.shots}
                                         logs={links.logs}
-                                        connectShots={() => connect("shots")}
-                                        connectLogs={() => connect("logs")}
-                                        disconnect={disconnect}
-                                        fix={fix}
-                                        log={logState}
+                                        openSettings={() => setTab("settings")}
                                         follow={follow}
                                         setFollow={setFollow}
                                         autoMap={autoMap}
@@ -933,23 +977,44 @@ export default function App() {
                                         openPip={openPip}
                                         pipSupported={true}
                                         sessionActive={!!session}
-                                        meName={(state.players.find((x) => x.id === state.activePlayer) ?? state.players[0]).name}
-                                        autoSync={state.autoSync !== false}
-                                        setAutoSync={(b) => setState((st) => ({ ...st, autoSync: b }))}
-                                        onSyncHistory={syncHistory}
-                                        syncNote={syncNote}
-                                        historyProgress={historyProgress}
-                                        screenshotKey={state.screenshotKey ?? ""}
-                                        setScreenshotKey={(k) => setState((st) => ({ ...st, screenshotKey: k }))}
                                         autoOverlay={state.autoOverlay !== false}
                                         setAutoOverlay={(b) => setState((st) => ({ ...st, autoOverlay: b }))}
                                         overlay={ovState}
-                                        onDataUpdated={() => {
-                                            resetStyled();
-                                            setDataRev((n) => n + 1);
-                                        }}
                                     />
                                 </>
+                            )}
+                            {tab === "settings" && (
+                                <SettingsTab
+                                    shots={links.shots}
+                                    logs={links.logs}
+                                    connectShots={() => connect("shots")}
+                                    connectLogs={() => connect("logs")}
+                                    disconnect={disconnect}
+                                    fix={fix}
+                                    log={logState}
+                                    meName={(state.players.find((x) => x.id === state.activePlayer) ?? state.players[0]).name}
+                                    autoSync={state.autoSync !== false}
+                                    setAutoSync={(b) => setState((st) => ({ ...st, autoSync: b }))}
+                                    onSyncHistory={syncHistory}
+                                    syncNote={syncNote}
+                                    historyProgress={historyProgress}
+                                    screenshotKey={state.screenshotKey ?? ""}
+                                    setScreenshotKey={(k) => setState((st) => ({ ...st, screenshotKey: k }))}
+                                    onDataUpdated={() => {
+                                        resetStyled();
+                                        setDataRev((n) => n + 1);
+                                    }}
+                                    players={state.players}
+                                    activePlayer={state.activePlayer}
+                                    onResetProgress={(id) =>
+                                        setState((st) => ({
+                                            ...st,
+                                            players: st.players.map((x) => (id === null || x.id === id ? { ...x, tasks: {}, objectivesDone: {} } : x)),
+                                            // события логов текущей сессии применятся заново
+                                            logSync: undefined,
+                                        }))
+                                    }
+                                />
                             )}
                             {tab === "players" && <PlayersTab state={state} setState={setState} />}
                         </div>

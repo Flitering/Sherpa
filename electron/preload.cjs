@@ -81,4 +81,8 @@ contextBridge.exposeInMainWorld("sherpa", {
         info: () => ipcRenderer.invoke("data:info"),
         onProgress: on("data:progress"),
     },
+    tarkovMarket: {
+        info: () => ipcRenderer.invoke("tm:info"),
+        setKey: (key) => ipcRenderer.invoke("tm:set", key),
+    },
 });

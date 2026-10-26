@@ -51,6 +51,7 @@
       "scripts/sync-data.mjs",
       "scripts/market-quests.json",
       "scripts/quest-overrides.json",
+      "scripts/sync-market-quests.mjs",
       "package.json"
     ],
     "asar": true,

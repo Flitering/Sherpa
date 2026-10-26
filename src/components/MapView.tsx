@@ -44,6 +44,8 @@ interface Props {
     onTakeTask: (taskId: string) => void;
     focus?: MapFocus;
     onSelectStop: (stopId: string, raid: number) => void;
+    /** В рейде: на этом месте предмета нет — убрать место и перестроить маршрут. */
+    onMarkEmpty?: (stopId: string, point: Vec3) => void;
 }
 
 
@@ -182,6 +184,34 @@ function MapView(props: Props) {
     onSelectRef.current = props.onSelectStop;
     const onTakeRef = useRef(props.onTakeTask);
     onTakeRef.current = props.onTakeTask;
+    const onEmptyRef = useRef(props.onMarkEmpty);
+    onEmptyRef.current = props.onMarkEmpty;
+    const canEmpty = !!props.onMarkEmpty;
+    /** Окно у места цели в рейде: «Здесь нет» — для целей с несколькими местами. */
+    const emptyPopup = (m: L.Marker, stopId: string, point: Vec3, title: string, left: number) => {
+        const box = document.createElement("div");
+        box.className = "popup";
+        const b = document.createElement("b");
+        b.textContent = title;
+        const d = document.createElement("div");
+        d.className = "muted";
+        d.textContent = left > 1 ? `Мест для проверки: ${left}` : "Последнее место";
+        const btn = document.createElement("button");
+        btn.textContent = "✗ Здесь нет";
+        btn.title = "Предмета на этом месте нет — убрать его и перестроить маршрут";
+        btn.onclick = () => {
+            m.closePopup();
+            onEmptyRef.current?.(stopId, point);
+        };
+        box.append(b, d, btn);
+        m.bindPopup(box, { offset: [0, -8] });
+        // подсказка при наведении закрыла бы окно с кнопкой
+        m.on("popupopen", () => {
+            m.closeTooltip();
+            m.getTooltip()?.setOpacity(0);
+        });
+        m.on("popupclose", () => m.getTooltip()?.setOpacity(0.9));
+    };
 
     // подписи районов: зависят только от «ступени» зума
     const sizes = useMemo(() => [...new Set(display.labels.map((l) => l.size))].sort((a, b) => b - a), [display]);
@@ -389,6 +419,7 @@ function MapView(props: Props) {
                         { direction: "top", offset: [0, -8] },
                     );
                     m.on("click", () => onSelectRef.current(st.stop.id, ri));
+                    if (canEmpty && !done) emptyPopup(m, st.stop.id, pt.position, st.stop.task.name, total);
                     m.addTo(g);
                     join(st.stop.id, m);
                 });
@@ -428,6 +459,7 @@ function MapView(props: Props) {
                     (pt?.approx ? `<br><span class="muted">место по карте вики, примерно ±10 м</span>` : "");
                 m.bindTooltip(`<b>${escapeHtml(s.stop.task.name)}</b><br>${escapeHtml(s.stop.objective.text)}${where}`, { direction: "top", offset: [0, -12] });
                 m.on("click", () => onSelectRef.current(s.stop.id, ri));
+                if (canEmpty && !done && places > 1) emptyPopup(m, s.stop.id, s.point, s.stop.task.name, places);
                 m.addTo(g);
                 if (places > 1) join(s.stop.id, m);
             });
@@ -437,7 +469,7 @@ function MapView(props: Props) {
             }
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [props.plan, sel, props.doneStops, props.targetStop, faintRoutes, activeExtents, mapGen]);
+    }, [props.plan, sel, props.doneStops, props.targetStop, faintRoutes, activeExtents, mapGen, canEmpty]);
 
     // ---- игрок ----
     // Без зависимости от зума: раньше слежение дёргало карту обратно после каждого приближения.

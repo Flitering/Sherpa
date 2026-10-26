@@ -479,7 +479,8 @@ export function buildMarket(data, tr, en = tr) {
 
 /**
  * Скачать и собрать данные.
- * @param {{ outData?: string, outSvg?: string, modes?: string[], forceSvg?: boolean, fetch?: typeof fetch, log?: (m: string) => void }} opts
+ * marketQuests — свежий список квестов tarkov-market (приложение качает его с ключом пользователя); без него — встроенный.
+ * @param {{ outData?: string, outSvg?: string, modes?: string[], forceSvg?: boolean, fetch?: typeof fetch, log?: (m: string) => void, marketQuests?: object }} opts
  */
 export async function syncData(opts = {}) {
     Object.assign(CFG, Object.fromEntries(Object.entries(opts).filter(([, v]) => v !== undefined)));
@@ -487,7 +488,7 @@ export async function syncData(opts = {}) {
     const { configs, svgFiles } = await loadMapConfigs();
     CFG.log(`Конфигурация карт: ${configs.length}`);
     await downloadSvgs(svgFiles);
-    const marketQuests = await loadMarketQuests();
+    const marketQuests = opts.marketQuests ?? (await loadMarketQuests());
     if (!marketQuests) CFG.log("Нет scripts/market-quests.json — квесты не сверяются с tarkov-market (npm run sync:quests)");
     const overrides = await loadOverrides();
     for (const mode of modes) await buildMode(mode, configs, marketQuests, overrides);

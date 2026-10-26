@@ -376,3 +376,51 @@ export function planWithSpawn(
     here.best = true; // сейчас ты здесь — этот рейд и предлагаем
     return { raids, budgetSec, raidSec };
 }
+
+/**
+ * В рейде: на месте `point` предмета цели `stopId` нет. Место убирается из цели, а оставшиеся
+ * (невыполненные и непропущенные) точки маршрута перестраиваются от `from` (позиция игрока или
+ * пустое место) до выхода — ближайшее из оставшихся мест этой цели может оказаться в другой стороне.
+ * Если мест у цели не осталось — `exhausted`, цель нужно пропустить.
+ */
+export function dropSpot(
+    raid: Raid,
+    stopId: string,
+    point: Vec3,
+    pending: (s: RaidStep) => boolean,
+    settings: RaidSettings,
+    from?: Vec3,
+): { raid: Raid; exhausted: boolean } {
+    const same = (a: Vec3, b: Vec3) => Math.abs(a.x - b.x) < 0.01 && Math.abs(a.z - b.z) < 0.01 && Math.abs(a.y - b.y) < 0.01;
+    let exhausted = false;
+    const steps = raid.steps.map((s) => {
+        if (s.stop.id !== stopId) return s;
+        const points = s.stop.points.filter((p) => !same(p.position, point));
+        if (!points.length) {
+            exhausted = true;
+            return s;
+        }
+        return { ...s, stop: { ...s.stop, points } };
+    });
+    const kept = steps.filter((s) => !pending(s) || (exhausted && s.stop.id === stopId));
+    const left = steps.filter((s) => pending(s) && !(exhausted && s.stop.id === stopId));
+    const travel = (a: Vec3, b: Vec3) => (dist(a, b) * settings.detour) / settings.speed;
+    const start = from ?? point;
+    const route = planRoute(
+        left.map((s) => ({ stop: s.stop, candidates: s.stop.points.map((p) => p.position) })),
+        start,
+        raid.extract?.position,
+    );
+    // время прибытия: от времени убранной точки по новому порядку
+    let t = raid.steps.find((s) => s.stop.id === stopId)?.eta ?? 0;
+    let prev = start;
+    const replanned: RaidStep[] = route.order.map((o) => {
+        t += travel(prev, o.point);
+        const eta = t;
+        t += objectiveSeconds(o.stop);
+        prev = o.point;
+        return { stop: o.stop, point: o.point, eta };
+    });
+    // пути по сетке относятся к старому порядку — навигатор считает путь к цели сам, карта рисует прямые
+    return { raid: { ...raid, steps: [...kept, ...replanned], legs: undefined, lengthM: undefined }, exhausted };
+}

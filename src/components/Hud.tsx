@@ -9,6 +9,19 @@ export interface Session {
     raid: Raid;
     startedAt: number;
     skipped: string[];
+    /** Сколько мест цели отмечено «здесь нет» в этом рейде (id точки маршрута → число). */
+    emptied?: Record<string, number>;
+}
+
+/** У цели несколько мест появления предмета — можно отметить «здесь нет» и идти к следующему. */
+export const canMarkEmpty = (session: Session, s: RaidStep) => s.stop.points.length > 1 || !!session.emptied?.[s.stop.id];
+
+/** «место 2 из 5 · пустых 1» — для цели с несколькими местами. */
+export function spotsText(session: Session, s: RaidStep): string {
+    const empty = session.emptied?.[s.stop.id] ?? 0;
+    const left = s.stop.points.length;
+    if (left < 2 && !empty) return "";
+    return `мест осталось: ${left}${empty ? ` · пустых: ${empty}` : ""}`;
 }
 
 interface Props {
@@ -20,6 +33,8 @@ interface Props {
     extract?: MapPoint;
     onDone: () => void;
     onSkip: () => void;
+    /** Предмета на этом месте нет — убрать место и перестроить маршрут. */
+    onEmpty: () => void;
     onStop?: () => void;
     raidStartFromLog?: number;
     /** Путь от игрока до цели по сетке проходимости. */
@@ -79,7 +94,7 @@ function screenVec(map: GameMap, fix: PlayerFix | undefined, dx: number, dz: num
     return [lng, -lat];
 }
 
-export default function Hud({ map, session, fix, target, remaining, extract, onDone, onSkip, onStop, raidStartFromLog, guide, compact, onToggleCompact, onDragStart, screenshotKey = "Print Screen" }: Props) {
+export default function Hud({ map, session, fix, target, remaining, extract, onDone, onSkip, onEmpty, onStop, raidStartFromLog, guide, compact, onToggleCompact, onDragStart, screenshotKey = "Print Screen" }: Props) {
     const now = useNow();
     const start = raidStartFromLog && raidStartFromLog > session.startedAt - 10 * 60_000 ? raidStartFromLog : session.startedAt;
     const elapsed = (now - start) / 1000;
@@ -204,6 +219,11 @@ export default function Hud({ map, session, fix, target, remaining, extract, onD
                             ✓ Выполнено
                         </button>
                     )}
+                    {target && canMarkEmpty(session, target) && (
+                        <button className="wide" onClick={onEmpty} title="Предмета здесь нет — к следующему возможному месту">
+                            ✗ Здесь нет · {target.stop.points.length > 1 ? `ещё ${target.stop.points.length - 1}` : "мест не осталось"}
+                        </button>
+                    )}
                 </div>
             ) : (
                 <>
@@ -218,6 +238,7 @@ export default function Hud({ map, session, fix, target, remaining, extract, onD
                         <b>{OBJECTIVE_LABEL[target.stop.objective.type] ?? ""}</b> {target.stop.objective.text}
                     </div>
                 )}
+                {target && spotsText(session, target) && <div className="hud-spots">{spotsText(session, target)}</div>}
                 {target && (
                     <div className="hud-who">
                         {target.stop.players.map((p) => (
@@ -235,6 +256,11 @@ export default function Hud({ map, session, fix, target, remaining, extract, onD
                 {target && (
                     <button className="primary" onClick={onDone}>
                         ✓ Выполнено
+                    </button>
+                )}
+                {target && canMarkEmpty(session, target) && (
+                    <button onClick={onEmpty} title="Предмета здесь нет — убрать место и перестроить маршрут">
+                        ✗ Здесь нет
                     </button>
                 )}
                 {target && <button onClick={onSkip}>Пропустить</button>}

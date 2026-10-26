@@ -131,9 +131,14 @@ export interface SherpaApi {
         onClosed(cb: () => void): Unsub;
     };
     data: { sync(modes?: string[]): Promise<number>; info(): Promise<{ lastSync: number | null; hasUserData: boolean }>; onProgress(cb: (m: string) => void): Unsub };
+    /** API-ключ tarkov-market: хранится зашифрованным в главном процессе, в окно не возвращается. null — удалить. */
+    tarkovMarket: {
+        info(): Promise<{ set: boolean; tail: string | null; canEncrypt: boolean; questsAt: string | null }>;
+        setKey(key: string | null): Promise<{ characters: { name: string; gameMode: string }[] }>;
+    };
 }
 
-export type OverlayAction = { type: "done" } | { type: "skip" } | { type: "stop" } | { type: "start"; raid: number } | { type: "dismiss" } | { type: "openMain" };
+export type OverlayAction = { type: "done" } | { type: "skip" } | { type: "empty" } | { type: "stop" } | { type: "start"; raid: number } | { type: "dismiss" } | { type: "openMain" };
 
 export const desktop: SherpaApi | undefined = (window as unknown as { sherpa?: SherpaApi }).sherpa;
 
