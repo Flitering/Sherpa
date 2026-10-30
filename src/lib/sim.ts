@@ -10,10 +10,12 @@ import type { PlayerFix } from "./navigator";
  * перестроение маршрута под позицию работают как обычно.
  */
 
-export type SimMode = "route" | "reverse" | "circle" | "wander";
+export type SimMode = "route" | "reverse" | "circle" | "wander" | "manual";
 
 export interface SimCfg {
     mode: SimMode;
+    /** «Пуск» сразу трогает игрока; снять галочку — прогон сразу встаёт на паузу (шаги — вручную) */
+    autoStart: boolean;
     /** м/с: 6.5 — бег, 30–45 — перемотка, чтобы перестроения успевали случаться чаще */
     speed: number;
     /** как часто появляется новая позиция, с (1 с — как настоящий скриншот) */
@@ -28,13 +30,14 @@ export interface SimCfg {
     inRaid: boolean;
 }
 
-export const DEFAULT_SIM: SimCfg = { mode: "route", speed: 6.5, every: 1, radius: 80, loop: true, eat: true, inRaid: true };
+export const DEFAULT_SIM: SimCfg = { mode: "route", autoStart: true, speed: 6.5, every: 1, radius: 80, loop: true, eat: true, inRaid: true };
 
 export const SIM_MODES: { id: SimMode; name: string }[] = [
     { id: "route", name: "по маршруту рейда" },
     { id: "reverse", name: "навстречу маршруту" },
     { id: "circle", name: "кругами на месте" },
     { id: "wander", name: "блуждание рядом" },
+    { id: "manual", name: "вручную" },
 ];
 
 /** Считаем точку пройденной, когда дошли до неё (иначе игрок топчется на месте). */
@@ -64,7 +67,7 @@ export function routeTrack(raid: Raid | undefined): Vec3[] {
  */
 export function simTrack(cfg: SimCfg, raid: Raid | undefined, origin: Vec3): Vec3[] {
     if (cfg.mode === "circle") return Array.from({ length: 13 }, (_, i) => ring(origin, cfg.radius, (i / 12) * Math.PI * 2));
-    if (cfg.mode === "wander") return [];
+    if (cfg.mode === "wander" || cfg.mode === "manual") return [];
     const t = routeTrack(raid);
     return cfg.mode === "reverse" ? t.slice().reverse() : t;
 }
@@ -128,6 +131,8 @@ function move(s: SimState, to: Vec3, dist: number): SimState {
  */
 export function simStep(s: SimState, cfg: SimCfg, raid: Raid | undefined, dist: number): SimState {
     if (s.mode !== cfg.mode) return simStart(cfg, raid, s.origin);
+    // «вручную» сама ничего не двигает: позицию ставит человек кликом по карте или маркером
+    if (cfg.mode === "manual") return s;
 
     if (cfg.mode === "wander") {
         // новая случайная точка рядом: шажки меньше порога MOVE_M не должны перестраивать маршрут
@@ -146,6 +151,18 @@ export function simStep(s: SimState, cfg: SimCfg, raid: Raid | undefined, dist: 
     return { ...move({ ...s, track, leg }, track[leg], dist), track, leg, done: false };
 }
 
+/**
+ * Позицию поставили вручную — клик по карте или перетаскивание маркера. След и счётчик пройденного
+ * продолжают считаться: по ним видно, куда именно перенесли игрока и после какого шага маршрут перестроился.
+ */
+export function simPlace(s: SimState, pos: Vec3): SimState {
+    const dx = pos.x - s.pos.x;
+    const dz = pos.z - s.pos.z;
+    const d = Math.hypot(dx, dz);
+    const forward = d > 0.01 ? { x: dx / d, z: dz / d } : s.forward;
+    return { ...s, pos, forward, walked: s.walked + d, trail: [...s.trail, pos].slice(-TRAIL_MAX), done: false };
+}
+
 /** Позиция симулятора в том же виде, что даёт разбор имени файла скриншота. */
 export function simFix(s: SimState, mapKey: string): PlayerFix & { mapKey: string } {
     return {
@@ -160,6 +177,8 @@ export function simFix(s: SimState, mapKey: string): PlayerFix & { mapKey: strin
 
 /** Отладочная строчка: сколько прошли и к какой точке пути идём. */
 export function simText(s: SimState): string {
+    const walked = `пройдено ${Math.round(s.walked)} м`;
+    if (s.mode === "manual") return `${walked} · ждём клика по карте или перетаскивания маркера`;
     const to = s.mode === "wander" ? "случайная точка" : s.track.length ? `точке ${Math.min(s.leg + 1, s.track.length)} из ${s.track.length}` : "нечего";
-    return `пройдено ${Math.round(s.walked)} м · ${s.done ? "маршрут пройден" : `идём к ${to}`}`;
+    return `${walked} · ${s.done ? "маршрут пройден" : `идём к ${to}`}`;
 }

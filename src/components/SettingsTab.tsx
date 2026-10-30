@@ -87,6 +87,7 @@ export default function SettingsTab(p: Props) {
                     <p className="hint">
                         Позиция рисуется сама и подаётся в то же состояние, что и разбор имён файлов скриншотов: наглядно видно, как маршрут перестраивается под перемещение игрока.
                         Во время прогона настоящие скриншоты игнорируются. Если рейда нет в логах игры, начало рейда и точка старта подставляются, чтобы режим «от твоей позиции» заработал.
+                        В любом режиме прогона позицию можно поставить и вручную — кликом по свободному месту карты или перетаскиванием маркера игрока.
                     </p>
                     <div className="row">
                         <label className="field">
@@ -113,6 +114,9 @@ export default function SettingsTab(p: Props) {
                         </label>
                     </div>
                     <label className="check">
+                        <input type="checkbox" checked={p.sim.cfg.autoStart} onChange={(e) => p.sim.setCfg({ ...p.sim.cfg, autoStart: e.target.checked })} /> автостарт: после «Пуск» игрок сразу идёт; без галочки прогон сразу встаёт на паузу
+                    </label>
+                    <label className="check">
                         <input type="checkbox" checked={p.sim.cfg.loop} onChange={(e) => p.sim.setCfg({ ...p.sim.cfg, loop: e.target.checked })} /> повторять маршрут по кругу
                     </label>
                     <label className="check">
@@ -122,23 +126,32 @@ export default function SettingsTab(p: Props) {
                         <input type="checkbox" checked={p.sim.cfg.inRaid} onChange={(e) => p.sim.setCfg({ ...p.sim.cfg, inRaid: e.target.checked })} /> считать, что мы в рейде (стрелка HUD и перестроение остатка маршрута)
                     </label>
                     <div className="row">
-                        {p.sim.on ? (
+                        {p.sim.cfg.mode === "manual" ? (
+                            <button onClick={p.sim.onStart}>{p.sim.has ? "Вернуть в начало" : "Пуск"}</button>
+                        ) : p.sim.on ? (
                             <button onClick={p.sim.onPause}>Пауза</button>
                         ) : p.sim.has ? (
                             <button onClick={p.sim.onResume}>Продолжить</button>
                         ) : (
                             <button onClick={p.sim.onStart}>Пуск</button>
                         )}
-                        {!p.sim.on && p.sim.has && (
+                        {p.sim.cfg.mode !== "manual" && !p.sim.on && p.sim.has && (
                             <button onClick={p.sim.onStart}>Заново</button>
                         )}
-                        <button onClick={p.sim.onStep} disabled={!p.sim.has || p.sim.on}>
-                            ▸ Шаг
-                        </button>
+                        {p.sim.cfg.mode !== "manual" && (
+                            <button onClick={p.sim.onStep} disabled={!p.sim.has || p.sim.on}>
+                                ▸ Шаг
+                            </button>
+                        )}
                         <button onClick={p.sim.onStop} disabled={!p.sim.has}>
                             Стоп
                         </button>
                     </div>
+                    {p.sim.cfg.mode === "manual" && (
+                        <p className="hint">
+                            В ручном режиме игрок ходит только от вас: клик по свободному месту карты или перетаскивание синего маркера игрока. Перестроение маршрута при этом работает по обычным правилам — свои пороги «ушёл далеко» и пауза между перестроениями.
+                        </p>
+                    )}
                     {p.sim.text && <div className="fix">{p.sim.text}</div>}
 
                     <div className="panel-title">

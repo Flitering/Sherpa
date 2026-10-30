@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import type { Bundle, GameMap, LayerExtent, MapLayer, Vec3 } from "../types";
-import { makeCRS, onLevel, toBounds, toLatLng } from "../lib/crs";
+import { fromLatLng, makeCRS, onLevel, toBounds, toLatLng } from "../lib/crs";
 import { objectivePoints } from "../lib/quests";
 import type { RaidPlan } from "../lib/raids";
 import type { PlayerFix } from "../lib/navigator";
@@ -49,6 +49,11 @@ interface Props {
     /** Симулятор движения (отладка): след прогона и отметка, что позиция нарисована сама. */
     simTrail?: Vec3[];
     sim?: boolean;
+    /**
+     * Симулятор (отладка): позиция игрока по клику. Клик по маркеру цели до карты не доходит,
+     * поэтому выбор цели не ломается. Маркер игрока в этом случае можно перетянуть.
+     */
+    onPlace?: (p: Vec3) => void;
 }
 
 
@@ -497,17 +502,34 @@ function MapView(props: Props) {
             const b = m.latLngToLayerPoint(toLatLng({ x: fix.position.x + fix.forward.x * 10, z: fix.position.z + fix.forward.z * 10 }));
             angle = (Math.atan2(b.x - a.x, -(b.y - a.y)) * 180) / Math.PI;
         }
-        L.marker(toLatLng(fix.position), {
+        const settable = !!props.onPlace;
+        const mk = L.marker(toLatLng(fix.position), {
             icon: L.divIcon({
-                className: "player-pin" + (fix.forward ? "" : " no-dir") + (props.sim ? " sim" : ""),
+                className: "player-pin" + (fix.forward ? "" : " no-dir") + (props.sim ? " sim" : "") + (settable ? " settable" : ""),
                 html: `<div style="transform: rotate(${angle}deg)"><svg viewBox="-20 -20 40 40" width="40" height="40"><path class="cone" d="M0 0 L-11 -18 A21 21 0 0 1 11 -18 Z"/><circle r="6"/></svg></div>`,
                 iconSize: [40, 40],
             }),
             zIndexOffset: 2000,
-            interactive: false,
+            interactive: settable,
+            draggable: settable,
         }).addTo(g);
+        // во время перетаскивания маркер ведёт сам Leaflet: в состояние пишем только в конце,
+        // иначе перерисовка слоя обрывает перетаскивание
+        if (settable) mk.on("dragend", () => props.onPlace?.(fromLatLng(mk.getLatLng())));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [props.fix, props.guide, props.simTrail, props.sim, mapGen]);
+
+    // ---- симулятор: клик по карте ставит позицию игрока ----
+    useEffect(() => {
+        const m = lmap.current;
+        const put = props.onPlace;
+        if (!m || !put) return;
+        const onClick = (e: L.LeafletMouseEvent) => put(fromLatLng(e.latlng));
+        m.on("click", onClick);
+        return () => {
+            m.off("click", onClick);
+        };
+    }, [props.onPlace, mapGen]);
 
     // слежение — только когда пришла новая позиция
     useEffect(() => {

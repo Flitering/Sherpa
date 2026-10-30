@@ -10,8 +10,8 @@
 import type { GameMap, MapPoint, Vec3 } from "../types";
 import { labelRu } from "./labels-ru";
 import type { Stop } from "./quests";
-import { dist, planRoute } from "./route";
-import { worthReordering } from "./replan";
+import { dist, pathLength, planRoute } from "./route";
+import { nearSpot, NEAR_MARGIN_M, worthReordering } from "./replan";
 
 export interface RaidSettings {
     /** Средняя скорость с учётом осторожного движения, м/с. */
@@ -384,6 +384,9 @@ export function planWithSpawn(
     return { raids, budgetSec, raidSec };
 }
 
+/** Одна и та же ли это точка (данные по координатам точные, сравниваем с запасом на округление). */
+const sameSpot = (a: Vec3, b: Vec3) => Math.abs(a.x - b.x) < 0.01 && Math.abs(a.z - b.z) < 0.01 && Math.abs(a.y - b.y) < 0.01;
+
 /**
  * В рейде: на месте `point` предмета цели `stopId` нет. Место убирается из цели, а оставшиеся
  * (невыполненные и непропущенные) точки маршрута перестраиваются от `from` (позиция игрока или
@@ -398,11 +401,10 @@ export function dropSpot(
     settings: RaidSettings,
     from?: Vec3,
 ): { raid: Raid; exhausted: boolean } {
-    const same = (a: Vec3, b: Vec3) => Math.abs(a.x - b.x) < 0.01 && Math.abs(a.z - b.z) < 0.01 && Math.abs(a.y - b.y) < 0.01;
     let exhausted = false;
     const steps = raid.steps.map((s) => {
         if (s.stop.id !== stopId) return s;
-        const points = s.stop.points.filter((p) => !same(p.position, point));
+        const points = s.stop.points.filter((p) => !sameSpot(p.position, point));
         if (!points.length) {
             exhausted = true;
             return s;
@@ -433,10 +435,36 @@ export function dropSpot(
 }
 
 /**
+ * Игрок дошёл до другого места цели: до своего места той цели, что идёт следующей, или до места цели,
+ * которая стояла позже в маршруте. Это только решение, без перестроения: `left` — оставшиеся цели в
+ * текущем порядке, `index` — номер цели в нём. Порог NEAR_MARGIN_M не даёт двум одинаково близким
+ * местам тянуть маршрут в разные стороны.
+ */
+export function approachJump(left: RaidStep[], at: Vec3): { index: number; point: Vec3; d: number } | undefined {
+    const cur = left[0];
+    if (!cur) return;
+    const near = nearSpot(
+        left.map((s) => s.stop),
+        at,
+    );
+    if (!near) return;
+    // то же самое место той же самой цели — игрок никуда не пришёл
+    if (near.index === 0 && sameSpot(near.point, cur.point)) return;
+    return near.d + NEAR_MARGIN_M < dist(at, cur.point) ? near : undefined;
+}
+
+/**
  * Позиция игрока обновилась (новый скриншот) — перестраиваем оставшуюся часть маршрута
  * от него: порядок целей и выбор места цели из нескольких могут оказаться другими, если игрок
  * зашёл с другой стороны. Выполненные и пропущенные точки остаются как были, время целей
  * считается от текущего момента рейда (`elapsedSec`), выход не трогаем — игрок мог выбрать его вручную.
+ *
+ * Отдельный случай — игрок встал рядом с непроверенным местом цели (у цели мест часто несколько:
+ * «Фельдшер» — несколько медиков, квестовый предмет — несколько контейнеров). Тогда активной
+ * делаем ту цель, к чьему месту он подошёл, даже если путь по прямой от этого места оказался длиннее:
+ * цель рядом можно закрыть сейчас. Порог NEAR_MARGIN_M не даёт двум одинаково близким местам
+ * тянуть маршрут в разные стороны. О таком перестроении говорим названием квеста — `switchedTo`.
+ *
  * Возвращает null, если перестроение ничего не даёт (пороги — в replan.ts): тогда маршрут оставляем как есть.
  */
 export function rerouteFrom(
@@ -445,22 +473,40 @@ export function rerouteFrom(
     pending: (s: RaidStep) => boolean,
     settings: RaidSettings,
     elapsedSec: number,
-): { raid: Raid; savedM: number } | null {
+): { raid: Raid; savedM: number; switchedTo?: string } | null {
     const kept = raid.steps.filter((s) => !pending(s));
     const left = raid.steps.filter(pending);
-    if (left.length < 2) return null; // менять порядок из одной точки нечего
+    if (!left.length) return null;
     const exit = raid.extract?.position;
-    const route = planRoute(
-        left.map((s) => ({ stop: s.stop, candidates: s.stop.points.map((p) => p.position) })),
-        at,
-        exit,
-    );
-    const cmp = worthReordering({ from: at, points: left.map((s) => s.point), exit }, { from: at, points: route.order.map((o) => o.point), exit });
-    if (!cmp.yes) return null;
+    // игрок дошёл до другого места — своей цели или той, что стояла позже: меняем активную цель
+    const jump = approachJump(left, at);
+    let order: { stop: Stop; point: Vec3 }[];
+    if (jump) {
+        const head = left[jump.index];
+        const rest = left.filter((_, i) => i !== jump.index);
+        const route = planRoute(
+            rest.map((s) => ({ stop: s.stop, candidates: s.stop.points.map((p) => p.position) })),
+            jump.point,
+            exit,
+        );
+        order = [{ stop: head.stop, point: jump.point }, ...route.order.map((o) => ({ stop: o.stop, point: o.point }))];
+    } else {
+        if (left.length < 2) return null; // менять порядок из одной точки нечего
+        const route = planRoute(
+            left.map((s) => ({ stop: s.stop, candidates: s.stop.points.map((p) => p.position) })),
+            at,
+            exit,
+        );
+        const cmp = worthReordering({ from: at, points: left.map((s) => s.point), exit }, { from: at, points: route.order.map((o) => o.point), exit });
+        if (!cmp.yes) return null;
+        order = route.order.map((o) => ({ stop: o.stop, point: o.point }));
+    }
+    // насколько новый порядок остатка ближе от текущей позиции; при переключении цели он мог и не улучшиться
+    const savedM = pathLength(left.map((s) => s.point), at, exit) - pathLength(order.map((o) => o.point), at, exit);
     const travel = (a: Vec3, b: Vec3) => (dist(a, b) * settings.detour) / settings.speed;
     let t = elapsedSec;
     let prev = at;
-    const replanned: RaidStep[] = route.order.map((o) => {
+    const replanned: RaidStep[] = order.map((o) => {
         t += travel(prev, o.point);
         const eta = t;
         t += objectiveSeconds(o.stop);
@@ -470,6 +516,7 @@ export function rerouteFrom(
     // старт маршрута — теперь позиция игрока, а не спавн, от которого он уже ушёл
     return {
         raid: { ...raid, steps: [...kept, ...replanned], spawn: at, startHere: true, legs: undefined, lengthM: undefined },
-        savedM: cmp.savedM,
+        savedM,
+        switchedTo: jump ? left[jump.index].stop.task.name : undefined,
     };
 }

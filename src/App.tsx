@@ -4,9 +4,9 @@ import type { Bundle, GameMode, Player, Task, TaskStatus, Vec3 } from "./types";
 import { usePersistentState } from "./lib/store";
 import { activeStops, isPicked, loadout, objectivePoints, taskOnMap, type QuestPick } from "./lib/quests";
 import { readExtractsFromShot } from "./lib/extractOcr";
-import { DEFAULT_RAID_SETTINGS, dropSpot, planRaids, planWithSpawn, rerouteFrom, type Raid, type RaidPlan, type RaidSettings, type RaidStep } from "./lib/raids";
+import { DEFAULT_RAID_SETTINGS, approachJump, dropSpot, planRaids, planWithSpawn, rerouteFrom, type Raid, type RaidPlan, type RaidSettings, type RaidStep } from "./lib/raids";
 import { COOLDOWN_MS, MOVE_M, movedFrom, worthReordering } from "./lib/replan";
-import { DEFAULT_SIM, simFix, simStart, simStep, simText, type SimCfg, type SimState } from "./lib/sim";
+import { DEFAULT_SIM, simFix, simPlace, simStart, simStep, simText, type SimCfg, type SimState } from "./lib/sim";
 import { refineRaids } from "./lib/realRoutes";
 import { loadSvgText, useNavGrid } from "./lib/useNavGrid";
 import { useSticky } from "./lib/sticky";
@@ -96,7 +96,9 @@ export default function App() {
     const [lastShot, setLastShot] = useState<string>();
     // ---------- симулятор движения (отладка) ----------
     /** Настройки симулятора помнятся: проще всего снова запустить тот же прогон. */
-    const [simCfg, setSimCfg] = useSticky<SimCfg>("sim.cfg", DEFAULT_SIM);
+    const [simCfgSaved, setSimCfg] = useSticky<SimCfg>("sim.cfg", DEFAULT_SIM);
+    /** В сохранённых настройках старых версий нет новых полей — добиваем их значениями по умолчанию. */
+    const simCfg = useMemo(() => ({ ...DEFAULT_SIM, ...simCfgSaved }), [simCfgSaved]);
     /** Идёт ли прогон сейчас (пауза оставляет позицию — можно шагать вручную). */
     const [simOn, setSimOn] = useState(false);
     /** Начало рейда, подставленное симулятором: без логов игры план от спавна не включился бы. */
@@ -310,7 +312,6 @@ export default function App() {
         if (!raid) return;
         setSession({ raid, startedAt: Date.now(), skipped: [] });
         setSel(i);
-        setTab("nav");
     };
     const stopRaid = () => {
         setSession(undefined);
@@ -366,7 +367,7 @@ export default function App() {
     const simTickRef = useRef<() => void>(() => {});
     simTickRef.current = () => {
         const s = simRef.current;
-        if (!s || !gameMap) return;
+        if (!s || !gameMap || simCfg.mode === "manual") return;
         const next = simStep(s, simCfg, simCtxRef.current.ride, simCfg.speed * simCfg.every);
         simRef.current = next;
         setFix(simFix(next, mapKey));
@@ -380,8 +381,13 @@ export default function App() {
 
     const startSim = () => {
         if (!gameMap) return;
-        const around = simCfg.mode === "circle" || simCfg.mode === "wander";
-        const from = (around ? visibleFix?.position ?? simRide?.spawn : simRide?.spawn ?? visibleFix?.position) ?? simRide?.steps[0]?.point;
+        const around = simCfg.mode === "circle" || simCfg.mode === "wander" || simCfg.mode === "manual";
+        const b = gameMap.display.bounds;
+        const from =
+            (around ? visibleFix?.position ?? simRide?.spawn : simRide?.spawn ?? visibleFix?.position) ??
+            simRide?.steps[0]?.point ??
+            // в ручном режиме идти не по чему — ставим игрока в центр карты, дальше он сам куда захочет
+            (simCfg.mode === "manual" ? { x: (b[0][0] + b[1][0]) / 2, y: 0, z: (b[0][1] + b[1][1]) / 2 } : undefined);
         if (!from) {
             setRaidNote("Симулятору негде идти: на этой карте нет маршрута и нет позиции игрока.");
             return;
@@ -403,13 +409,35 @@ export default function App() {
         simRef.current = s;
         setFix(simFix(s, mapKey));
         setSimView({ trail: s.trail, text: simText(s) });
-        setSimOn(true);
-        noteRoute("Симулятор движения: настоящие скриншоты пока игнорируются, позиция рисуется сама");
+        // «вручную» ходит только от рук человека, автостарт тут ни при чём
+        const running = simCfg.mode !== "manual" && simCfg.autoStart;
+        setSimOn(running);
+        noteRoute(
+            simCfg.mode === "manual"
+                ? "Симулятор в ручном режиме: позицию ставь кликом по карте или перетаскиванием маркера"
+                : running
+                  ? "Симулятор движения: настоящие скриншоты пока игнорируются, позиция рисуется сама"
+                  : "Симулятор сразу на паузе: шаг кнопкой «▸ Шаг» или позиция кликом по карте",
+        );
     };
     /** Пауза оставляет позицию и траекторию: можно шагать вручную или продолжить. */
     const pauseSim = () => setSimOn(false);
     const resumeSim = () => simRef.current && setSimOn(true);
     const stepSim = () => simRef.current && simTickRef.current();
+    /**
+     * Позицию поставили руками: клик по карте или перетаскивание маркера игрока. Клик даёт только x/z,
+     * поэтому этаж оставляем тот, на котором стояли. Дальше разницы нет: позиция идёт в то же состояние,
+     * что и разбор скриншота, значит перестроение маршрута отрабатывает по обычным правилам.
+     */
+    const placeSim = (p: Vec3) => {
+        const s = simRef.current;
+        if (!s || !gameMap) return;
+        const next = simPlace(s, { ...p, y: s.pos.y });
+        simRef.current = next;
+        setFix(simFix(next, mapKey));
+        setSimView({ trail: next.trail, text: simText(next) });
+        simEatRef.current(next.pos);
+    };
     const stopSim = () => {
         simRef.current = null;
         setSimOn(false);
@@ -419,10 +447,10 @@ export default function App() {
     };
 
     useEffect(() => {
-        if (!simOn) return;
+        if (!simOn || simCfg.mode === "manual") return;
         const id = setInterval(() => simTickRef.current(), Math.max(0.1, simCfg.every) * 1000);
         return () => clearInterval(id);
-    }, [simOn, simCfg.every]);
+    }, [simOn, simCfg.every, simCfg.mode]);
 
     // сменилась карта — прогон по старой остановим, иначе позиции пойдут не про ту карту
     useEffect(() => {
@@ -705,23 +733,34 @@ export default function App() {
     // Игрок идёт по карте, и порядок целей (как и то, к какой из нескольких вести) должен считаться
     // от него, а не от спавна. Но не на каждом скриншоте: пороги, когда перестроение действительно
     // нужно, — в replan.ts (шум координат + дорогой пересчёт путей по сетке).
+    // Если игрок встал рядом с непроверенным местом цели (у цели таких мест может быть несколько),
+    // активной делаем именно эту цель — пороги NEAR_* тоже в replan.ts.
     useEffect(() => {
         if (session || !gameMap || !spawnHere || !anchor || !visibleFix || !raidStartLog) return;
-        if (movedFrom(anchor.pos, visibleFix.position) < MOVE_M) return;
-        const saved = planAnchor && planAnchor.raid === raidStartLog && planAnchor.mapKey === mapKey ? planAnchor : null;
-        if (saved && Date.now() - saved.at < COOLDOWN_MS) return;
         const at = visibleFix.position;
+        const saved = planAnchor && planAnchor.raid === raidStartLog && planAnchor.mapKey === mapKey ? planAnchor : null;
         const shape = (r: Raid | undefined, start: Vec3) => ({ from: start, points: r?.steps.map((s) => s.point) ?? [], exit: r?.extract?.position });
         // план от старой точки и план от новой — сравниваем оба, уже стоя в новой точке
         const was = planWithSpawn(gameMap, stops, raidSettings, anchor.pos, extractOverride[mapKey], allowedExtracts).raids[0];
         const now = planWithSpawn(gameMap, stops, raidSettings, at, extractOverride[mapKey], allowedExtracts).raids[0];
+        // встал рядом с местом цели, к которому план ведёт не первым, — план должен повести к нему сразу,
+        // пороги «отошёл на MOVE_M» и пауза между перестроениями тут только помешали бы
+        const jump = approachJump(now?.steps ?? [], at);
+        if (jump && straightDist(anchor.pos, at) < 0.5) return; // якорь уже здесь: перестроить нечего, состояние не гоняем
+        if (!jump) {
+            if (movedFrom(anchor.pos, at) < MOVE_M) return;
+            if (saved && Date.now() - saved.at < COOLDOWN_MS) return;
+        }
         const cmp = worthReordering(shape(was, at), shape(now, at));
-        if (!cmp.yes) return;
+        if (!jump && !cmp.yes) return;
         setPlanAnchor({ raid: raidStartLog, mapKey, pos: at, at: Date.now() });
+        const nearName = jump ? now.steps[jump.index]?.stop.task.name : undefined;
         noteRoute(
-            cmp.savedM >= 1
-                ? `Маршрут перестроен под твою позицию: стало короче на ~${Math.round(cmp.savedM)} м (по прямой)`
-                : "Маршрут перестроен под твою позицию: из неё целей влезает больше",
+            nearName
+                ? `Ты у места цели «${nearName}» — план пересчитан от этой точки`
+                : cmp.savedM >= 1
+                  ? `Маршрут перестроен под твою позицию: стало короче на ~${Math.round(cmp.savedM)} м (по прямой)`
+                  : "Маршрут перестроен под твою позицию: из неё целей влезает больше",
         );
     }, [session, gameMap, spawnHere, anchor, visibleFix, raidStartLog, planAnchor, stops, raidSettings, extractOverride, mapKey, allowedExtracts, setPlanAnchor]);
 
@@ -731,18 +770,28 @@ export default function App() {
         if (!session || !visibleFix) return;
         const key = session.startedAt;
         const seen = replanRef.current.key === key ? replanRef.current : { key, at: 0 };
-        if (movedFrom(seen.pos, visibleFix.position) < MOVE_M) return;
-        if (Date.now() - seen.at < COOLDOWN_MS) return;
         const at = visibleFix.position;
         const pending = (s: RaidStep) => !isDone(s) && !session.skipped.includes(s.stop.id);
+        // Подошёл к другому месту цели — перестраиваем сразу: пороги «отошёл на MOVE_M» и пауза между
+        // перестроениями здесь только мешают (иначе, встав рядом с целью, придётся ждать минуту).
+        const jump = approachJump(session.raid.steps.filter(pending), at);
+        if (!jump) {
+            if (movedFrom(seen.pos, at) < MOVE_M) return;
+            if (Date.now() - seen.at < COOLDOWN_MS) return;
+        }
         // отсчёт времени целей — от начала рейда в логах (он точнее момента нажатия «Начать»)
         const clock = logState?.raidStart && logState.raidStart > session.startedAt - 10 * 60_000 ? logState.raidStart : session.startedAt;
         const r = rerouteFrom(session.raid, at, pending, raidSettings, (Date.now() - clock) / 1000);
         // позицию фиксируем и когда перестроение не потребовалось: иначе одна и та же проверка на каждом шуме
-        replanRef.current = { key, pos: at, at: Date.now() };
+        // (переключение цели паузу между перестроениями не тратит — оно и так по факту перестроение)
+        replanRef.current = { key, pos: at, at: jump ? seen.at : Date.now() };
         if (!r) return;
         setSession((s) => (s && s.startedAt === key ? { ...s, raid: r.raid } : s));
-        noteRoute(`Остаток маршрута перестроен от твоей позиции: стало короче на ~${Math.round(r.savedM)} м (по прямой)`);
+        noteRoute(
+            r.switchedTo
+                ? `Активная цель — «${r.switchedTo}»: ведём к месту, рядом с которым ты встал${r.savedM >= 1 ? `, и маршрут от него ближе на ~${Math.round(r.savedM)} м` : ""}`
+                : `Остаток маршрута перестроен от твоей позиции: стало короче на ~${Math.round(r.savedM)} м (по прямой)`,
+        );
     }, [session, visibleFix, isDone, raidSettings, logState?.raidStart]);
 
     // Путь для навигатора: по общей сетке, а у цели (≤140 м) — подробный, через двери и лестницы.
@@ -1014,6 +1063,7 @@ export default function App() {
                             availableExtracts={allowedExtracts}
                             simTrail={simView?.trail}
                             sim={!!simView}
+                            onPlace={simView ? placeSim : undefined}
                         />
                         <div className="map-toggles">
                             <label className="check"><input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} /> районы</label>
