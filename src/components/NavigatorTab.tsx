@@ -56,7 +56,8 @@ export default function NavigatorTab(p: Props) {
                         Прозрачное окно поверх игры с навигатором и миникартой. Двигай за верхнюю полосу, меняй размер за края. Игру запускай в режиме <b>«Оконный без рамки»</b>.
                     </p>
                     <div className="row">
-                        <button className="primary" onClick={p.openPip} disabled={p.overlay.open}>
+                        {/* кнопка активна всегда: виджет мог быть скрыт горячей клавишей, и его нужно уметь показать снова */}
+                        <button className="primary" onClick={p.openPip}>
                             {p.overlay.open ? "Виджет открыт" : "Открыть виджет"}
                         </button>
                         {p.overlay.open && <button onClick={() => desktop!.overlay.close()}>Скрыть</button>}

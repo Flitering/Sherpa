@@ -398,6 +398,7 @@ function fitOnScreen(b) {
 function createOverlay() {
     if (overlayWin) {
         overlayWin.showInactive();
+        sendOverlayState(); // окно уже было: «show» может и не сработать, а состояние уехать должно
         return overlayWin;
     }
     const b = fitOnScreen(settings.overlay);
@@ -435,9 +436,14 @@ function createOverlay() {
     };
     overlayWin.on("resize", remember);
     overlayWin.on("move", remember);
+    // виджет прячут не только кнопкой: горячая клавиша, крестик в самом виджете.
+    // Интерфейс должен знать правду, иначе кнопка «Открыть виджет» залипнет нажатой.
+    overlayWin.on("show", sendOverlayState);
+    overlayWin.on("hide", sendOverlayState);
     overlayWin.on("closed", () => {
         overlayWin = null;
         mainWin?.webContents.send("overlay:closed");
+        sendOverlayState();
     });
     return overlayWin;
 }
@@ -448,8 +454,14 @@ function applyClickThrough() {
     overlayWin.setIgnoreMouseEvents(on, { forward: true });
 }
 
+/**
+ * Открыт ли виджет на самом деле. Окно может жить и быть скрытым (горячая клавиша прячет его,
+ * а не закрывает), поэтому «существует» и «открыт» — разные вещи.
+ */
+const overlayOpen = () => !!overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible();
+
 function sendOverlayState() {
-    const s = { opacity: settings.overlay.opacity, clickThrough: !!settings.overlay.clickThrough, open: !!overlayWin };
+    const s = { opacity: settings.overlay.opacity, clickThrough: !!settings.overlay.clickThrough, open: overlayOpen() };
     overlayWin?.webContents.send("overlay:state", s);
     mainWin?.webContents.send("overlay:state", s);
 }
@@ -475,7 +487,7 @@ function trayMenu() {
         up?.status === "ready" ? `Установить обновление ${up.version}` : up?.status === "available" ? `Скачать обновление ${up.version}` : "Проверить обновления";
     return Menu.buildFromTemplate([
         { label: "Открыть Sherpa", click: showMain },
-        { label: overlayWin?.isVisible() ? "Скрыть виджет" : "Показать виджет", click: () => HOTKEYS["CommandOrControl+Shift+N"]() },
+        { label: overlayOpen() ? "Скрыть виджет" : "Показать виджет", click: () => HOTKEY_ACTIONS.overlay() },
         {
             label: "Цена по наведению",
             type: "checkbox",
@@ -667,7 +679,7 @@ function registerIpc() {
         applyClickThrough();
         sendOverlayState();
     });
-    handle("overlay:getState", UI, () => ({ opacity: settings.overlay.opacity, clickThrough: !!settings.overlay.clickThrough, open: !!overlayWin }));
+    handle("overlay:getState", UI, () => ({ opacity: settings.overlay.opacity, clickThrough: !!settings.overlay.clickThrough, open: overlayOpen() }));
     on("overlay:model", MAIN, (_e, model) => {
         lastModel = model;
         overlayWin?.webContents.send("overlay:model", model);
