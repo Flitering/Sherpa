@@ -213,6 +213,7 @@ function HudView({ hud, now, view, setRadius, act }: { hud: HudModel; now: numbe
                     {hud.behindMin > 0 && <span className="late"> · отстаём на {hud.behindMin} мин</span>}
                 </div>
                 <div className="ov-goal">{hud.goalName}</div>
+                {hud.note && <div className="ov-note">{hud.note}</div>}
                 {hud.spots && (
                     <div className="ov-spots">
                         мест осталось: {hud.spots.left}

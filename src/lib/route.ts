@@ -24,6 +24,18 @@ export interface RouteResult<T> {
     length: number;
 }
 
+/** Длина ломаной `start → точки → end`, м; концы без координат в конце и начале не считаются. */
+export function pathLength(points: Vec3[], start?: Vec3, end?: Vec3): number {
+    let d = 0;
+    let prev = start;
+    for (const p of points) {
+        if (prev) d += dist(prev, p);
+        prev = p;
+    }
+    if (end && prev) d += dist(prev, end);
+    return d;
+}
+
 export function planRoute<T>(stops: RouteInput<T>[], start?: Vec3, end?: Vec3): RouteResult<T> {
     if (!stops.length) return { order: [], length: 0 };
 
@@ -45,15 +57,11 @@ export function planRoute<T>(stops: RouteInput<T>[], start?: Vec3, end?: Vec3): 
     }
 
     const point = (k: { i: number; c: number }) => stops[k.i].candidates[k.c];
+    const seqPts: Vec3[] = [];
     const total = () => {
-        let d = 0;
-        let prev = start;
-        for (const k of seq) {
-            if (prev) d += dist(prev, point(k));
-            prev = point(k);
-        }
-        if (end && prev) d += dist(prev, end);
-        return d;
+        seqPts.length = 0;
+        for (const k of seq) seqPts.push(point(k));
+        return pathLength(seqPts, start, end);
     };
 
     // 2. Чередуем 2-opt (переворот отрезков) и перевыбор альтернатив, пока есть улучшения.

@@ -436,7 +436,7 @@ function MapView(props: Props) {
             }
             if (raid.spawn && !dim) {
                 L.marker(toLatLng(raid.spawn), { icon: L.divIcon({ className: "spawn-pin", html: "S", iconSize: [18, 18] }) })
-                    .bindTooltip(raid.spawnKnown ? "Точка спавна (по скриншоту)" : "Вероятный спавн (ближайший к первой точке)")
+                    .bindTooltip(raid.startHere ? "Старт маршрута — твоя позиция (по скриншоту)" : raid.spawnKnown ? "Точка спавна (по скриншоту)" : "Вероятный спавн (ближайший к первой точке)")
                     .addTo(g);
             }
             raid.steps.forEach((s, i) => {

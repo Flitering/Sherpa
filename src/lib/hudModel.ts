@@ -67,6 +67,8 @@ export interface HudModel {
     pathMin?: number;
     arrived: boolean;
     guide?: [number, number][];
+    /** Короткое сообщение о перестроении маршрута — видно в виджете, пока не исчезнет. */
+    note?: string;
     points: HudPoint[];
     extract?: { x: number; z: number; name: string };
     screenshotKey: string;
@@ -83,6 +85,8 @@ export interface HudInput {
     guide?: { points: [number, number][]; length: number; detail?: DetailRoute };
     screenshotKey: string;
     now: number;
+    /** Короткое сообщение о перестроении маршрута (игрок в игре, а перестроение меняет цель). */
+    note?: string;
     /** Места, отмеченные «здесь нет» в этом рейде: id точки маршрута → число. */
     emptied?: Record<string, number>;
 }
@@ -168,6 +172,7 @@ export function computeHud(inp: HudInput): HudModel {
         pathMin: guide ? Math.max(1, Math.round((guide.length * 1.1) / 2.2 / 60)) : undefined,
         arrived: straight !== undefined && straight < 7 && !floorText,
         guide: guide?.points,
+        note: inp.note,
         points: inp.remaining.flatMap((s) => {
             const label = `${raid.index + 1}.${raid.steps.indexOf(s) + 1}`;
             const alts = s.stop.points.filter((p) => p.position !== s.point).map((p) => ({ ...p.position, label, alt: true }));

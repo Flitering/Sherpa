@@ -11,6 +11,7 @@ import type { GameMap, MapPoint, Vec3 } from "../types";
 import { labelRu } from "./labels-ru";
 import type { Stop } from "./quests";
 import { dist, planRoute } from "./route";
+import { worthReordering } from "./replan";
 
 export interface RaidSettings {
     /** Средняя скорость с учётом осторожного движения, м/с. */
@@ -61,6 +62,8 @@ export interface Raid {
     spawn?: Vec3;
     /** Спавн известен по скриншоту (а не угадан как ближайший к первой точке). */
     spawnKnown?: boolean;
+    /** Точка, от которой ведём маршрут — текущая позиция игрока, а не спавн: он уже в рейде и ушёл с него. */
+    startHere?: boolean;
     extract?: MapPoint;
     /** Оценка, с: дорога, задания, весь рейд. */
     travelSec: number;
@@ -258,7 +261,9 @@ export function markBest(raids: Raid[]) {
 export const fmtMin = (sec: number) => `${Math.max(1, Math.round(sec / 60))} мин`;
 
 /**
- * План от настоящей точки спавна (известна по первому скриншоту в рейде).
+ * План от настоящей точки спавна (известна по первому скриншоту в рейде) или от текущей
+ * позиции игрока, если он уже ушёл из точки спавна (`startHere` — тогда маршрут строится
+ * от неё, а не от спавна).
  * Рейд «отсюда»: жадно добавляем цели с наименьшим приростом времени (вставка в лучшее место маршрута,
  * общие для группы цели дешевле), пока весь путь до выхода укладывается в бюджет. Порядок затем
  * улучшается 2-opt от спавна к выходу. Оставшиеся цели — обычное разбиение на будущие рейды.
@@ -270,6 +275,7 @@ export function planWithSpawn(
     spawn: Vec3,
     extractOverride?: Record<number, string>,
     allowed?: Set<string>,
+    startHere = false,
 ): RaidPlan {
     const raidSec = (map.raidDuration ?? 40) * 60;
     const budgetSec = raidSec * settings.budgetShare;
@@ -352,10 +358,11 @@ export function planWithSpawn(
     const here: Raid = {
         index: 0,
         color: RAID_COLORS[0],
-        name: `От спавна · ${districtName(map, steps.map((s) => s.point)) || "рядом"}`,
+        name: `${startHere ? "От твоей позиции" : "От спавна"} · ${districtName(map, steps.map((s) => s.point)) || "рядом"}`,
         steps,
         spawn,
         spawnKnown: true,
+        startHere,
         extract,
         travelSec,
         taskSec,
@@ -423,4 +430,46 @@ export function dropSpot(
     });
     // пути по сетке относятся к старому порядку — навигатор считает путь к цели сам, карта рисует прямые
     return { raid: { ...raid, steps: [...kept, ...replanned], legs: undefined, lengthM: undefined }, exhausted };
+}
+
+/**
+ * Позиция игрока обновилась (новый скриншот) — перестраиваем оставшуюся часть маршрута
+ * от него: порядок целей и выбор места цели из нескольких могут оказаться другими, если игрок
+ * зашёл с другой стороны. Выполненные и пропущенные точки остаются как были, время целей
+ * считается от текущего момента рейда (`elapsedSec`), выход не трогаем — игрок мог выбрать его вручную.
+ * Возвращает null, если перестроение ничего не даёт (пороги — в replan.ts): тогда маршрут оставляем как есть.
+ */
+export function rerouteFrom(
+    raid: Raid,
+    at: Vec3,
+    pending: (s: RaidStep) => boolean,
+    settings: RaidSettings,
+    elapsedSec: number,
+): { raid: Raid; savedM: number } | null {
+    const kept = raid.steps.filter((s) => !pending(s));
+    const left = raid.steps.filter(pending);
+    if (left.length < 2) return null; // менять порядок из одной точки нечего
+    const exit = raid.extract?.position;
+    const route = planRoute(
+        left.map((s) => ({ stop: s.stop, candidates: s.stop.points.map((p) => p.position) })),
+        at,
+        exit,
+    );
+    const cmp = worthReordering({ from: at, points: left.map((s) => s.point), exit }, { from: at, points: route.order.map((o) => o.point), exit });
+    if (!cmp.yes) return null;
+    const travel = (a: Vec3, b: Vec3) => (dist(a, b) * settings.detour) / settings.speed;
+    let t = elapsedSec;
+    let prev = at;
+    const replanned: RaidStep[] = route.order.map((o) => {
+        t += travel(prev, o.point);
+        const eta = t;
+        t += objectiveSeconds(o.stop);
+        prev = o.point;
+        return { stop: o.stop, point: o.point, eta };
+    });
+    // старт маршрута — теперь позиция игрока, а не спавн, от которого он уже ушёл
+    return {
+        raid: { ...raid, steps: [...kept, ...replanned], spawn: at, startHere: true, legs: undefined, lengthM: undefined },
+        savedM: cmp.savedM,
+    };
 }

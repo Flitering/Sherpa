@@ -4,7 +4,8 @@ import type { Bundle, GameMode, Player, Task, TaskStatus, Vec3 } from "./types";
 import { usePersistentState } from "./lib/store";
 import { activeStops, isPicked, loadout, objectivePoints, taskOnMap, type QuestPick } from "./lib/quests";
 import { readExtractsFromShot } from "./lib/extractOcr";
-import { DEFAULT_RAID_SETTINGS, dropSpot, planRaids, planWithSpawn, type Raid, type RaidPlan, type RaidSettings, type RaidStep } from "./lib/raids";
+import { DEFAULT_RAID_SETTINGS, dropSpot, planRaids, planWithSpawn, rerouteFrom, type Raid, type RaidPlan, type RaidSettings, type RaidStep } from "./lib/raids";
+import { COOLDOWN_MS, MOVE_M, movedFrom, worthReordering } from "./lib/replan";
 import { refineRaids } from "./lib/realRoutes";
 import { loadSvgText, useNavGrid } from "./lib/useNavGrid";
 import { useSticky } from "./lib/sticky";
@@ -95,8 +96,15 @@ export default function App() {
     /** Время начала рейда (по логу), для которого уже показали предложение. */
     const [promptedRaid, setPromptedRaid] = useSticky<number>("raid.prompted", 0);
     const [raidNote, setRaidNote] = useState<string>();
+    /** Короткое сообщение в виджете поверх игры (там нет кнопки его закрыть, поэтому гаснет само). */
+    const [routeNote, setRouteNote] = useState<string>();
     /** Первая позиция в текущем рейде (по скриншоту) — от неё строится маршрут. */
     const [raidSpawn, setRaidSpawn] = useSticky<{ raid: number; mapKey: string; pos: Vec3; late: boolean } | null>("raid.spawn", null);
+    /**
+     * Точка, от которой план текущего рейда перестроен: позиция игрока, если он ушёл со спавна
+     * и перестроение дало выигрыш. Пока её нет — план считается от спавна.
+     */
+    const [planAnchor, setPlanAnchor] = useSticky<{ raid: number; mapKey: string; pos: Vec3; at: number } | null>("plan.anchor", null);
     /** Выходы, прочитанные со скриншота в этом рейде. */
     const [exitsNote, setExitsNote] = useSticky<{ raid: number; mapKey: string; names: string[] } | null>("raid.exits", null);
     // плавающий виджет: позиция и компактный режим запоминаются
@@ -160,14 +168,23 @@ export default function App() {
     const raidActive =
         !!raidStartLog && (!logState?.raidEnd || logState.raidEnd < raidStartLog) && Date.now() - raidStartLog < (logState?.raidConfirmed === false ? 6 : 75) * 60_000;
     const spawnHere = raidActive && raidSpawn && raidSpawn.raid === raidStartLog && raidSpawn.mapKey === mapKey ? raidSpawn : null;
+    /**
+     * От какой точки планируем рейд: спавн, а как только игрок от него ушёл — его текущая позиция
+     * (её подтверждает перестроение ниже, иначе маршрут скакал бы на каждом шуме координат).
+     */
+    const anchor = useMemo(() => {
+        if (!spawnHere) return undefined;
+        const moved = planAnchor && planAnchor.raid === raidStartLog && planAnchor.mapKey === mapKey ? planAnchor : null;
+        return moved ? { pos: moved.pos, startHere: true } : { pos: spawnHere.pos, startHere: spawnHere.late };
+    }, [spawnHere, planAnchor, raidStartLog, mapKey]);
     const rawPlan: RaidPlan = useMemo(
         () =>
             !gameMap
                 ? { raids: [], budgetSec: 0, raidSec: 0 }
-                : spawnHere
-                  ? planWithSpawn(gameMap, stops, raidSettings, spawnHere.pos, extractOverride[mapKey], allowedExtracts)
+                : anchor
+                  ? planWithSpawn(gameMap, stops, raidSettings, anchor.pos, extractOverride[mapKey], allowedExtracts, anchor.startHere)
                   : planRaids(gameMap, stops, raidSettings, extractOverride[mapKey], allowedExtracts),
-        [gameMap, stops, raidSettings, extractOverride, mapKey, allowedExtracts, spawnHere],
+        [gameMap, stops, raidSettings, extractOverride, mapKey, allowedExtracts, anchor],
     );
 
     // Реальные пути по сетке проходимости: считаются в фоне, до готовности — прямые линии.
@@ -317,7 +334,7 @@ export default function App() {
     const offerNote = !raidActive
         ? undefined
         : spawnHere
-          ? `${spawnHere.late ? "Маршрут от твоей позиции" : "Маршрут от точки спавна"} · ${exitsHere ? `выходы: ${exitsHere.names.join(", ")}` : "учтены все выходы ЧВК — дважды нажми O и сделай скриншот, чтобы оставить только твои"}`
+          ? `${anchor?.startHere ? "Маршрут от твоей позиции" : "Маршрут от точки спавна"} · ${exitsHere ? `выходы: ${exitsHere.names.join(", ")}` : "учтены все выходы ЧВК — дважды нажми O и сделай скриншот, чтобы оставить только твои"}`
           : `Сделай скриншот (${screenshotKey}) сразу после спавна — построю маршрут от точки спавна. Если перед этим дважды нажать O, учту только открытые тебе выходы.`;
     const offerDefault = spawnHere ? 0 : sel ?? plan.raids.find((r) => r.best)?.index ?? 0;
     const showRaidPrompt = !session && raidActive && raidStartLog !== promptedRaid;
@@ -570,6 +587,61 @@ export default function App() {
     );
     const visibleFix = fix && fix.mapKey === mapKey ? fix : undefined;
 
+    /** Сообщение о перестроении: в окне (пока не скроют) и в виджете (само гаснет — игрок мог не посмотреть). */
+    const noteRoute = (text: string) => {
+        setRaidNote(text);
+        setRouteNote(text);
+    };
+    useEffect(() => {
+        if (!routeNote) return;
+        const t = setTimeout(() => setRouteNote(undefined), 45_000);
+        return () => clearTimeout(t);
+    }, [routeNote]);
+
+    // ---------- маршрут под текущую позицию ----------
+    // Игрок идёт по карте, и порядок целей (как и то, к какой из нескольких вести) должен считаться
+    // от него, а не от спавна. Но не на каждом скриншоте: пороги, когда перестроение действительно
+    // нужно, — в replan.ts (шум координат + дорогой пересчёт путей по сетке).
+    useEffect(() => {
+        if (session || !gameMap || !spawnHere || !anchor || !visibleFix || !raidStartLog) return;
+        if (movedFrom(anchor.pos, visibleFix.position) < MOVE_M) return;
+        const saved = planAnchor && planAnchor.raid === raidStartLog && planAnchor.mapKey === mapKey ? planAnchor : null;
+        if (saved && Date.now() - saved.at < COOLDOWN_MS) return;
+        const at = visibleFix.position;
+        const shape = (r: Raid | undefined, start: Vec3) => ({ from: start, points: r?.steps.map((s) => s.point) ?? [], exit: r?.extract?.position });
+        // план от старой точки и план от новой — сравниваем оба, уже стоя в новой точке
+        const was = planWithSpawn(gameMap, stops, raidSettings, anchor.pos, extractOverride[mapKey], allowedExtracts).raids[0];
+        const now = planWithSpawn(gameMap, stops, raidSettings, at, extractOverride[mapKey], allowedExtracts).raids[0];
+        const cmp = worthReordering(shape(was, at), shape(now, at));
+        if (!cmp.yes) return;
+        setPlanAnchor({ raid: raidStartLog, mapKey, pos: at, at: Date.now() });
+        noteRoute(
+            cmp.savedM >= 1
+                ? `Маршрут перестроен под твою позицию: стало короче на ~${Math.round(cmp.savedM)} м (по прямой)`
+                : "Маршрут перестроен под твою позицию: из неё целей влезает больше",
+        );
+    }, [session, gameMap, spawnHere, anchor, visibleFix, raidStartLog, planAnchor, stops, raidSettings, extractOverride, mapKey, allowedExtracts, setPlanAnchor]);
+
+    // Шли по маршруту, позиция обновилась — перестраиваем его остаток от игрока
+    const replanRef = useRef<{ key: number; pos?: Vec3; at: number }>({ key: 0, at: 0 });
+    useEffect(() => {
+        if (!session || !visibleFix) return;
+        const key = session.startedAt;
+        const seen = replanRef.current.key === key ? replanRef.current : { key, at: 0 };
+        if (movedFrom(seen.pos, visibleFix.position) < MOVE_M) return;
+        if (Date.now() - seen.at < COOLDOWN_MS) return;
+        const at = visibleFix.position;
+        const pending = (s: RaidStep) => !isDone(s) && !session.skipped.includes(s.stop.id);
+        // отсчёт времени целей — от начала рейда в логах (он точнее момента нажатия «Начать»)
+        const clock = logState?.raidStart && logState.raidStart > session.startedAt - 10 * 60_000 ? logState.raidStart : session.startedAt;
+        const r = rerouteFrom(session.raid, at, pending, raidSettings, (Date.now() - clock) / 1000);
+        // позицию фиксируем и когда перестроение не потребовалось: иначе одна и та же проверка на каждом шуме
+        replanRef.current = { key, pos: at, at: Date.now() };
+        if (!r) return;
+        setSession((s) => (s && s.startedAt === key ? { ...s, raid: r.raid } : s));
+        noteRoute(`Остаток маршрута перестроен от твоей позиции: стало короче на ~${Math.round(r.savedM)} м (по прямой)`);
+    }, [session, visibleFix, isDone, raidSettings, logState?.raidStart]);
+
     // Путь для навигатора: по общей сетке, а у цели (≤140 м) — подробный, через двери и лестницы.
     const [guide, setGuide] = useState<{ points: [number, number][]; length: number; detail?: DetailRoute }>();
     const goal = target?.point ?? session?.raid.extract?.position;
@@ -698,6 +770,7 @@ export default function App() {
                     screenshotKey,
                     now: Date.now(),
                     emptied: session.emptied,
+                    note: routeNote,
                 }),
             };
         } else if (showRaidPrompt && gameMap && raidStartLog) {
