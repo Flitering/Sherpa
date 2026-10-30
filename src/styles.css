@@ -304,6 +304,10 @@ path.off-level { stroke-opacity: 0.3; fill-opacity: 0.05; }
 .player-pin .cone { fill: #e3c96b55; stroke: #e3c96baa; stroke-width: 1; }
 .player-pin circle { fill: var(--hi); stroke: #000; stroke-width: 2; }
 .player-pin.no-dir .cone { display: none; }
+/* симулятор движения (отладка): след прогона и синяя метка — позиция нарисована сама, не по скриншоту */
+.sim-line { stroke: var(--blue); stroke-width: 2; stroke-dasharray: 4 8; fill: none; opacity: 0.7; }
+.player-pin.sim .cone { fill: #6ea7bf44; stroke: #6ea7bfaa; }
+.player-pin.sim circle { fill: var(--blue); }
 
 .popup { display: flex; flex-direction: column; gap: 4px; max-width: 240px; }
 .popup button { align-self: flex-start; margin-top: 4px; }

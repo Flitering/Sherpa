@@ -46,6 +46,9 @@ interface Props {
     onSelectStop: (stopId: string, raid: number) => void;
     /** В рейде: на этом месте предмета нет — убрать место и перестроить маршрут. */
     onMarkEmpty?: (stopId: string, point: Vec3) => void;
+    /** Симулятор движения (отладка): след прогона и отметка, что позиция нарисована сама. */
+    simTrail?: Vec3[];
+    sim?: boolean;
 }
 
 
@@ -480,6 +483,10 @@ function MapView(props: Props) {
         g.clearLayers();
         const fix = props.fix;
         if (!fix) return;
+        // след прогона симулятора — под линией пути, чтобы было видно, куда реально водили игрока
+        if (props.simTrail && props.simTrail.length > 1) {
+            L.polyline(props.simTrail.map((p) => toLatLng(p)), { className: "sim-line", interactive: false }).addTo(g);
+        }
         if (props.guide && props.guide.length > 1) {
             L.polyline(props.guide.map(([x, z]) => toLatLng({ x, z })), { className: "guide-line", interactive: false }).addTo(g);
         }
@@ -492,7 +499,7 @@ function MapView(props: Props) {
         }
         L.marker(toLatLng(fix.position), {
             icon: L.divIcon({
-                className: "player-pin" + (fix.forward ? "" : " no-dir"),
+                className: "player-pin" + (fix.forward ? "" : " no-dir") + (props.sim ? " sim" : ""),
                 html: `<div style="transform: rotate(${angle}deg)"><svg viewBox="-20 -20 40 40" width="40" height="40"><path class="cone" d="M0 0 L-11 -18 A21 21 0 0 1 11 -18 Z"/><circle r="6"/></svg></div>`,
                 iconSize: [40, 40],
             }),
@@ -500,7 +507,7 @@ function MapView(props: Props) {
             interactive: false,
         }).addTo(g);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [props.fix, props.guide, mapGen]);
+    }, [props.fix, props.guide, props.simTrail, props.sim, mapGen]);
 
     // слежение — только когда пришла новая позиция
     useEffect(() => {

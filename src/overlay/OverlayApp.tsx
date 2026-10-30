@@ -252,7 +252,7 @@ function HudView({ hud, now, view, setRadius, act }: { hud: HudModel; now: numbe
                     )}
                     {!view.compact && <button onClick={() => act({ type: "stop" })}>Закончить</button>}
                 </div>
-                <div className="ov-foot">{age === undefined ? `Позиции ещё нет — нажми ${hud.screenshotKey} в игре` : `позиция ${age} с назад`}</div>
+                <div className="ov-foot">{age === undefined ? `Позиции ещё нет — нажми ${hud.screenshotKey} в игре` : `позиция ${age} с назад${hud.sim ? " · симулятор" : ""}`}</div>
             </div>
         </>
     );

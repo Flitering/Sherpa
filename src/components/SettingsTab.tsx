@@ -4,6 +4,8 @@ import type { LogState } from "../lib/gamelogs";
 import { fsSupported } from "../lib/navigator";
 import { desktop } from "../lib/desktop";
 import type { Player } from "../types";
+import type { SimCfg, SimMode } from "../lib/sim";
+import { SIM_MODES } from "../lib/sim";
 import { AppPanel, PricePanel } from "./DesktopPanels";
 import type { NavLink } from "./NavigatorTab";
 
@@ -28,6 +30,21 @@ interface Props {
     activePlayer: string;
     /** Сбросить статусы квестов и отметки целей игрока (или всех — null). */
     onResetProgress: (playerId: string | null) => void;
+    /** Симулятор движения (отладка): прогон игрока, чтобы смотреть перестроение маршрута. */
+    sim: {
+        cfg: SimCfg;
+        setCfg: (c: SimCfg) => void;
+        /** прогон идёт прямо сейчас */
+        on: boolean;
+        /** есть незавершённый прогон (его можно продолжить шагами) */
+        has: boolean;
+        text?: string;
+        onStart: () => void;
+        onPause: () => void;
+        onResume: () => void;
+        onStep: () => void;
+        onStop: () => void;
+    };
 }
 
 /** «log_2026.10.22_22-32-15_…» → «22.10.2026 22:32». */
@@ -63,6 +80,66 @@ export default function SettingsTab(p: Props) {
                             {p.fix.heading !== undefined && ` · взгляд ${Math.round(p.fix.heading)}°`}
                         </div>
                     )}
+
+                    <div className="panel-title">
+                        <span>Симулятор движения (отладка)</span>
+                    </div>
+                    <p className="hint">
+                        Позиция рисуется сама и подаётся в то же состояние, что и разбор имён файлов скриншотов: наглядно видно, как маршрут перестраивается под перемещение игрока.
+                        Во время прогона настоящие скриншоты игнорируются. Если рейда нет в логах игры, начало рейда и точка старта подставляются, чтобы режим «от твоей позиции» заработал.
+                    </p>
+                    <div className="row">
+                        <label className="field">
+                            Как идём
+                            <select value={p.sim.cfg.mode} onChange={(e) => p.sim.setCfg({ ...p.sim.cfg, mode: e.target.value as SimMode })}>
+                                {SIM_MODES.map((m) => (
+                                    <option key={m.id} value={m.id}>
+                                        {m.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                        <label className="field">
+                            Скорость, м/с
+                            <input type="number" min={0.5} max={30} step={0.5} value={p.sim.cfg.speed} onChange={(e) => p.sim.setCfg({ ...p.sim.cfg, speed: Math.max(0.5, Number(e.target.value) || 0.5) })} />
+                        </label>
+                        <label className="field">
+                            Шаг каждый, с
+                            <input type="number" min={0.2} max={10} step={0.2} value={p.sim.cfg.every} onChange={(e) => p.sim.setCfg({ ...p.sim.cfg, every: Math.max(0.2, Number(e.target.value) || 0.2) })} />
+                        </label>
+                        <label className="field">
+                            Радиус кругов и блуждания, м (с нового прогона)
+                            <input type="number" min={10} max={600} step={10} value={p.sim.cfg.radius} onChange={(e) => p.sim.setCfg({ ...p.sim.cfg, radius: Math.max(10, Number(e.target.value) || 10) })} />
+                        </label>
+                    </div>
+                    <label className="check">
+                        <input type="checkbox" checked={p.sim.cfg.loop} onChange={(e) => p.sim.setCfg({ ...p.sim.cfg, loop: e.target.checked })} /> повторять маршрут по кругу
+                    </label>
+                    <label className="check">
+                        <input type="checkbox" checked={p.sim.cfg.eat} onChange={(e) => p.sim.setCfg({ ...p.sim.cfg, eat: e.target.checked })} /> отмечать цели взятыми при подходе (только в сессии, прогресс не сохраняется)
+                    </label>
+                    <label className="check">
+                        <input type="checkbox" checked={p.sim.cfg.inRaid} onChange={(e) => p.sim.setCfg({ ...p.sim.cfg, inRaid: e.target.checked })} /> считать, что мы в рейде (стрелка HUD и перестроение остатка маршрута)
+                    </label>
+                    <div className="row">
+                        {p.sim.on ? (
+                            <button onClick={p.sim.onPause}>Пауза</button>
+                        ) : p.sim.has ? (
+                            <button onClick={p.sim.onResume}>Продолжить</button>
+                        ) : (
+                            <button onClick={p.sim.onStart}>Пуск</button>
+                        )}
+                        {!p.sim.on && p.sim.has && (
+                            <button onClick={p.sim.onStart}>Заново</button>
+                        )}
+                        <button onClick={p.sim.onStep} disabled={!p.sim.has || p.sim.on}>
+                            ▸ Шаг
+                        </button>
+                        <button onClick={p.sim.onStop} disabled={!p.sim.has}>
+                            Стоп
+                        </button>
+                    </div>
+                    {p.sim.text && <div className="fix">{p.sim.text}</div>}
 
                     <div className="panel-title">
                         <span>Логи игры</span>

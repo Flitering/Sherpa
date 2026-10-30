@@ -6,6 +6,7 @@ import { activeStops, isPicked, loadout, objectivePoints, taskOnMap, type QuestP
 import { readExtractsFromShot } from "./lib/extractOcr";
 import { DEFAULT_RAID_SETTINGS, dropSpot, planRaids, planWithSpawn, rerouteFrom, type Raid, type RaidPlan, type RaidSettings, type RaidStep } from "./lib/raids";
 import { COOLDOWN_MS, MOVE_M, movedFrom, worthReordering } from "./lib/replan";
+import { DEFAULT_SIM, simFix, simStart, simStep, simText, type SimCfg, type SimState } from "./lib/sim";
 import { refineRaids } from "./lib/realRoutes";
 import { loadSvgText, useNavGrid } from "./lib/useNavGrid";
 import { useSticky } from "./lib/sticky";
@@ -93,6 +94,16 @@ export default function App() {
     const [pip, setPip] = useState<Window | null>(null);
     const [showSetup, setShowSetup] = useState(() => !state.setupDone);
     const [lastShot, setLastShot] = useState<string>();
+    // ---------- симулятор движения (отладка) ----------
+    /** Настройки симулятора помнятся: проще всего снова запустить тот же прогон. */
+    const [simCfg, setSimCfg] = useSticky<SimCfg>("sim.cfg", DEFAULT_SIM);
+    /** Идёт ли прогон сейчас (пауза оставляет позицию — можно шагать вручную). */
+    const [simOn, setSimOn] = useState(false);
+    /** Начало рейда, подставленное симулятором: без логов игры план от спавна не включился бы. */
+    const [simRaid, setSimRaid] = useSticky<number | null>("sim.raid", null);
+    /** Что рисовать на карте и что показать в настройках: траектория и показания. */
+    const [simView, setSimView] = useState<{ trail: Vec3[]; text: string }>();
+    const simRef = useRef<SimState | null>(null);
     /** Время начала рейда (по логу), для которого уже показали предложение. */
     const [promptedRaid, setPromptedRaid] = useSticky<number>("raid.prompted", 0);
     const [raidNote, setRaidNote] = useState<string>();
@@ -163,10 +174,15 @@ export default function App() {
     const planBundle = useMemo(() => (bundle ? { ...bundle, tasks: bundle.tasks.filter((t) => isPicked(t, state.questPick)) } : null), [bundle, state.questPick]);
     const stops = useMemo(() => (planBundle && gameMap ? activeStops(planBundle, state.players, mapKey, includeShoot) : []), [planBundle, gameMap, state.players, mapKey, includeShoot]);
     // рейд по логам (нужен уже здесь: план зависит от точки спавна текущего рейда)
-    const raidStartLog = logState?.raidStart;
+    const realRaidStart = logState?.raidStart;
     // поиск матча без загрузки карты (его могли отменить) считается рейдом 6 минут, загруженный рейд — 75
-    const raidActive =
-        !!raidStartLog && (!logState?.raidEnd || logState.raidEnd < raidStartLog) && Date.now() - raidStartLog < (logState?.raidConfirmed === false ? 6 : 75) * 60_000;
+    const realRaidActive =
+        !!realRaidStart && (!logState?.raidEnd || logState.raidEnd < realRaidStart) && Date.now() - realRaidStart < (logState?.raidConfirmed === false ? 6 : 75) * 60_000;
+    // симулятор: своего рейда в логах нет — начало подставляем сами, иначе план от точки спавна не проснётся.
+    // живой прогон держим живым и «рейд»: пока не нажали «Стоп», план и остаток маршрута считаются от позиции симулятора
+    const simRaidNow = !realRaidActive && simRaid && !!simRef.current ? simRaid : undefined;
+    const raidStartLog = realRaidActive ? realRaidStart : simRaidNow ?? realRaidStart;
+    const raidActive = realRaidActive || !!simRaidNow;
     const spawnHere = raidActive && raidSpawn && raidSpawn.raid === raidStartLog && raidSpawn.mapKey === mapKey ? raidSpawn : null;
     /**
      * От какой точки планируем рейд: спавн, а как только игрок от него ушёл — его текущая позиция
@@ -328,6 +344,91 @@ export default function App() {
         });
     };
 
+    // ---------- симулятор движения (отладка) ----------
+    // Приложению про игрока нужна только позиция. Обычно она приходит из имён файлов скриншотов,
+    // которые игрок делает в рейде, а здесь её рисует sim.ts. Дальше разницы нет: карта, стрелка,
+    // путь по сетке и перестроение маршрута под позицию работают с этой позицией как обычно.
+    /** Маршрут, по которому водим симулятор: рейд сессии, иначе выбранный (или лучший) из плана. */
+    const simRide = session?.raid ?? plan.raids[sel ?? plan.raids.find((r) => r.best)?.index ?? 0];
+    const simCtxRef = useRef<{ ride?: Raid }>({});
+    simCtxRef.current = { ride: simRide };
+
+    /** Дошли до цели — снимаем её с маршрута. Только сессия: прогресс игрока не портим. */
+    const simEatRef = useRef<(at: Vec3) => void>(() => {});
+    simEatRef.current = (at) => {
+        if (!session || !simCfg.eat) return;
+        const hit = session.raid.steps.find((s) => !isDone(s) && !session.skipped.includes(s.stop.id) && Math.hypot(s.point.x - at.x, s.point.z - at.z) < 12);
+        if (!hit) return;
+        setSession((s) => (s && !s.skipped.includes(hit.stop.id) ? { ...s, skipped: [...s.skipped, hit.stop.id] } : s));
+    };
+
+    /** Один шаг: пройти speed*every метров к следующей точке пути. */
+    const simTickRef = useRef<() => void>(() => {});
+    simTickRef.current = () => {
+        const s = simRef.current;
+        if (!s || !gameMap) return;
+        const next = simStep(s, simCfg, simCtxRef.current.ride, simCfg.speed * simCfg.every);
+        simRef.current = next;
+        setFix(simFix(next, mapKey));
+        setSimView({ trail: next.trail, text: simText(next) });
+        simEatRef.current(next.pos);
+        if (next.done) {
+            setSimOn(false);
+            setSimView({ trail: next.trail, text: `${simText(next)} — прогон остановлен` });
+        }
+    };
+
+    const startSim = () => {
+        if (!gameMap) return;
+        const around = simCfg.mode === "circle" || simCfg.mode === "wander";
+        const from = (around ? visibleFix?.position ?? simRide?.spawn : simRide?.spawn ?? visibleFix?.position) ?? simRide?.steps[0]?.point;
+        if (!from) {
+            setRaidNote("Симулятору негде идти: на этой карте нет маршрута и нет позиции игрока.");
+            return;
+        }
+        const at = Date.now();
+        if (realRaidActive && realRaidStart) {
+            if (!raidSpawn || raidSpawn.raid !== realRaidStart || raidSpawn.mapKey !== mapKey) setRaidSpawn({ raid: realRaidStart, mapKey, pos: from, late: false });
+        } else {
+            // рейда в логах нет — начало и «спавн» подставляем сами, ровно как их даёт первый скриншот
+            setSimRaid(at);
+            setRaidSpawn({ raid: at, mapKey, pos: from, late: false });
+            setPlanAnchor(null);
+        }
+        if (simCfg.inRaid && !session) {
+            const i = plan.raids.findIndex((r) => r === simRide);
+            if (i >= 0) startRaid(i);
+        }
+        const s = simStart(simCfg, session?.raid ?? simRide, from);
+        simRef.current = s;
+        setFix(simFix(s, mapKey));
+        setSimView({ trail: s.trail, text: simText(s) });
+        setSimOn(true);
+        noteRoute("Симулятор движения: настоящие скриншоты пока игнорируются, позиция рисуется сама");
+    };
+    /** Пауза оставляет позицию и траекторию: можно шагать вручную или продолжить. */
+    const pauseSim = () => setSimOn(false);
+    const resumeSim = () => simRef.current && setSimOn(true);
+    const stepSim = () => simRef.current && simTickRef.current();
+    const stopSim = () => {
+        simRef.current = null;
+        setSimOn(false);
+        setSimView(undefined);
+        setSimRaid(null);
+        setFix(undefined);
+    };
+
+    useEffect(() => {
+        if (!simOn) return;
+        const id = setInterval(() => simTickRef.current(), Math.max(0.1, simCfg.every) * 1000);
+        return () => clearInterval(id);
+    }, [simOn, simCfg.every]);
+
+    // сменилась карта — прогон по старой остановим, иначе позиции пойдут не про ту карту
+    useEffect(() => {
+        if (simRef.current) stopSim();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mapKey]);
 
     // ---------- рейд по логам ----------
     const exitsHere = exitsLive;
@@ -452,6 +553,8 @@ export default function App() {
         return watchScreenshots(
             h,
             (f) => {
+                // пока идёт прогон симулятора, скриншоты игрока не нужны: позиция рисуется сама
+                if (simRef.current) return;
                 setFix({ ...f, mapKey: mapKeyRef.current });
                 setLastShot(f.file);
                 onShotRef.current(f, h);
@@ -745,6 +848,7 @@ export default function App() {
                 compact={hudCompact}
                 onToggleCompact={() => setHudCompact(!hudCompact)}
                 screenshotKey={screenshotKey}
+                sim={!!simView}
             />
         ) : null;
 
@@ -771,6 +875,7 @@ export default function App() {
                     now: Date.now(),
                     emptied: session.emptied,
                     note: routeNote,
+                    sim: !!simView,
                 }),
             };
         } else if (showRaidPrompt && gameMap && raidStartLog) {
@@ -907,6 +1012,8 @@ export default function App() {
                             onMarkEmpty={session ? markEmpty : undefined}
                             showHazards={showHazards}
                             availableExtracts={allowedExtracts}
+                            simTrail={simView?.trail}
+                            sim={!!simView}
                         />
                         <div className="map-toggles">
                             <label className="check"><input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} /> районы</label>
@@ -1087,6 +1194,18 @@ export default function App() {
                                             logSync: undefined,
                                         }))
                                     }
+                                    sim={{
+                                        cfg: simCfg,
+                                        setCfg: setSimCfg,
+                                        on: simOn,
+                                        has: !!simRef.current,
+                                        text: simView?.text,
+                                        onStart: startSim,
+                                        onPause: pauseSim,
+                                        onResume: resumeSim,
+                                        onStep: stepSim,
+                                        onStop: stopSim,
+                                    }}
                                 />
                             )}
                             {tab === "players" && <PlayersTab state={state} setState={setState} />}

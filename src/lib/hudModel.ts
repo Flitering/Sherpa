@@ -72,6 +72,8 @@ export interface HudModel {
     points: HudPoint[];
     extract?: { x: number; z: number; name: string };
     screenshotKey: string;
+    /** Позицию рисует симулятор движения (отладка) — в виджете это надо видеть. */
+    sim?: boolean;
 }
 
 export interface HudInput {
@@ -85,6 +87,8 @@ export interface HudInput {
     guide?: { points: [number, number][]; length: number; detail?: DetailRoute };
     screenshotKey: string;
     now: number;
+    /** Позицию рисует симулятор движения (отладка). */
+    sim?: boolean;
     /** Короткое сообщение о перестроении маршрута (игрок в игре, а перестроение меняет цель). */
     note?: string;
     /** Места, отмеченные «здесь нет» в этом рейде: id точки маршрута → число. */
@@ -180,6 +184,7 @@ export function computeHud(inp: HudInput): HudModel {
         }),
         extract: extract ? { x: extract.position.x, z: extract.position.z, name: extract.name } : undefined,
         screenshotKey: inp.screenshotKey,
+        sim: inp.sim,
     };
 }
 
