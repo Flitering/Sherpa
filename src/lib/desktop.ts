@@ -62,7 +62,7 @@ export interface AppPrefs {
     closeToTray: boolean;
 }
 
-export type HotkeyId = "overlay" | "clickThrough" | "done" | "skip" | "price";
+export type HotkeyId = "overlay" | "clickThrough" | "done" | "skip" | "undo" | "price";
 export interface Hotkey {
     id: HotkeyId;
     /** «Ctrl+Shift+P»; пустая строка — выключено. */
@@ -138,7 +138,7 @@ export interface SherpaApi {
     };
 }
 
-export type OverlayAction = { type: "done" } | { type: "skip" } | { type: "empty" } | { type: "stop" } | { type: "start"; raid: number } | { type: "dismiss" } | { type: "openMain" };
+export type OverlayAction = { type: "done" } | { type: "skip" } | { type: "empty" } | { type: "undo" } | { type: "stop" } | { type: "start"; raid: number } | { type: "dismiss" } | { type: "openMain" };
 
 export const desktop: SherpaApi | undefined = (window as unknown as { sherpa?: SherpaApi }).sherpa;
 

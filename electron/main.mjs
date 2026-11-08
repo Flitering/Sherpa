@@ -788,6 +788,7 @@ const HOTKEY_DEFAULTS = {
     clickThrough: "Ctrl+Shift+L",
     done: "Ctrl+Shift+D",
     skip: "Ctrl+Shift+S",
+    undo: "Ctrl+Shift+Z",
     price: "Ctrl+Shift+P",
 };
 const HOTKEY_ACTIONS = {
@@ -803,6 +804,7 @@ const HOTKEY_ACTIONS = {
     },
     done: () => mainWin?.webContents.send("overlay:action", { type: "done" }),
     skip: () => mainWin?.webContents.send("overlay:action", { type: "skip" }),
+    undo: () => mainWin?.webContents.send("overlay:action", { type: "undo" }),
     price: () => price?.scanNow(),
 };
 /** Действия, чьё сочетание не удалось занять: его держит другая программа, нажатия уходят в игру. */

@@ -35,6 +35,8 @@ import SettingsTab from "./components/SettingsTab";
 import SetupWizard from "./components/SetupWizard";
 import RaidPrompt from "./components/RaidPrompt";
 import Hud, { type Session } from "./components/Hud";
+import InRaidTab from "./components/InRaidTab";
+import { patchPlayers, useRaidHistory, type RaidPatch, type RaidSnap } from "./lib/raidHistory";
 import QuestScan from "./components/QuestScan";
 import MarketTab from "./components/MarketTab";
 import PriceTip from "./components/PriceTip";
@@ -42,7 +44,7 @@ import { hideTip, loadMarket, MarketContext, refreshMarket, showTip, type Market
 import { scanTaskHistory, watchLogs, type LogState } from "./lib/gamelogs";
 import { applyActiveList, applyTaskEvents, type SyncSummary } from "./lib/progressSync";
 
-type Tab = "quests" | "raids" | "loadout" | "market" | "nav" | "players" | "settings";
+type Tab = "quests" | "raids" | "loadout" | "market" | "nav" | "inraid" | "players" | "settings";
 type Which = "shots" | "logs";
 
 /** Короткий сигнал о начале рейда. */
@@ -307,18 +309,75 @@ export default function App() {
     const target = remaining[0];
     const doneStops = useMemo(() => new Set((session?.raid.steps ?? plan.raids.flatMap((r) => r.steps)).filter(isDone).map((s) => s.stop.id)), [session, plan, isDone]);
 
+    // ---------- история действий в рейде ----------
+    // Отменяются только действия игрока над целями (выполнено / пропущено / «место пусто»). Снимок берём
+    // по минимуму: маршрут, пропуски, пустые места и отметки целей у игроков. Возвращаем из снимка только
+    // те отметки, которые поменяло само действие, — то, что успела поставить синхронизация логов или игрок
+    // в «Группе», остаётся на месте. Перестроение маршрута под позицию и шаги симулятора историю не
+    // открывают: для них отмены нет.
+    const raidSnap = (): RaidSnap => ({ raid: session?.raid, skipped: session?.skipped ?? [], emptied: session?.emptied, players: state.players });
+    const hist = useRaidHistory();
+    useEffect(() => hist.commit(raidSnap()), [session, state.players]);
+    /** Откатить или повторить шаг: маршрут и пропуски берём из шага, отметки возвращаем только те, что меняло действие. */
+    const applyPatch = (ps: RaidPatch[]) => {
+        for (const p of ps) {
+            const s = p.session;
+            if (s) setSession((cur) => (cur && s.raid ? { ...cur, raid: s.raid, skipped: s.skipped, emptied: s.emptied } : cur));
+            if (p.objectives.length) setState((st) => ({ ...st, players: patchPlayers(st.players, p.objectives) }));
+        }
+    };
+    const undoRaid = () => {
+        const p = hist.undo();
+        if (p) applyPatch([p]);
+        return !!p;
+    };
+    const redoRaid = () => {
+        const p = hist.redo();
+        if (p) applyPatch([p]);
+        return !!p;
+    };
+    /** Вернуть (или снова применить) запись журнала: вместе с ней откатываются те, что были после неё. */
+    const revertRaid = (id: number, forward = false) => {
+        const ps = hist.revert(id, forward);
+        if (ps) applyPatch(ps);
+        return !!ps;
+    };
+
+    /** Вкладке «В рейде»: снять или вернуть отметку подзадачи у всех её владельцев. */
+    const markObjective = (task: Task, objectiveId: string, done: boolean, stopId?: string) => {
+        // для цели из маршрута берём её участников (так же, как isDone), иначе — всех, кто взял квест
+        const step = stopId ? session?.raid.steps.find((s) => s.stop.id === stopId) : undefined;
+        const ids = (step ? step.stop.players : state.players.filter((p) => p.tasks[task.id] === "active")).map((p) => p.id);
+        if (!ids.length) return;
+        hist.open(`${done ? "цель выполнена" : "снята отметка"} · ${task.name}`, raidSnap());
+        setObjective(ids, objectiveId, done);
+    };
+    const doneStop = (stopId: string) => {
+        const step = session?.raid.steps.find((s) => s.stop.id === stopId);
+        if (step) markObjective(step.stop.task, step.stop.objective.id, true, stopId);
+    };
+    /** Пропустить цель маршрута: пройти мимо, квест остаётся невзятым до следующего рейда. */
+    const skipStop = (stopId: string) => {
+        const step = session?.raid.steps.find((s) => s.stop.id === stopId);
+        if (!step) return;
+        hist.open(`цель пропущена · ${step.stop.task.name}`, raidSnap());
+        setSession((s) => (s ? { ...s, skipped: [...s.skipped, stopId] } : s));
+    };
+
     const startRaid = (i: number) => {
         const raid = plan.raids[i];
         if (!raid) return;
         setSession({ raid, startedAt: Date.now(), skipped: [] });
         setSel(i);
+        hist.clear();
     };
     const stopRaid = () => {
         setSession(undefined);
+        hist.clear();
         pip?.close();
     };
-    const markDone = () => target && setObjective(target.stop.players.map((p) => p.id), target.stop.objective.id, true);
-    const skip = () => target && setSession((s) => (s ? { ...s, skipped: [...s.skipped, target.stop.id] } : s));
+    const markDone = () => target && markObjective(target.stop.task, target.stop.objective.id, true, target.stop.id);
+    const skip = () => target && skipStop(target.stop.id);
     /**
      * Предмета на месте нет: убрать это место и перестроить остаток маршрута от игрока.
      * Без аргументов — место текущей цели (кнопка в HUD); с аргументами — любое место на карте:
@@ -327,7 +386,9 @@ export default function App() {
     const markEmpty = (stopId?: string, point?: Vec3) => {
         const id = stopId ?? target?.stop.id;
         const spot = point ?? target?.point;
-        if (!id || !spot) return;
+        if (!id || !spot || !session) return;
+        const name = session.raid.steps.find((st) => st.stop.id === id)?.stop.task.name;
+        hist.open(`место пусто${name ? ` · ${name}` : ""}`, raidSnap());
         const from = fix && fix.mapKey === mapKey ? fix.position : undefined;
         setSession((s) => {
             if (!s) return s;
@@ -486,6 +547,7 @@ export default function App() {
         const done = session.raid.steps.filter(isDone).length;
         setRaidNote(`Рейд завершён: выполнено ${done} из ${session.raid.steps.length} целей.`);
         setSession(undefined);
+        hist.clear();
         pip?.close();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [logState?.raidEnd]);
@@ -729,6 +791,31 @@ export default function App() {
         return () => clearTimeout(t);
     }, [routeNote]);
 
+    // Ctrl+Z / Ctrl+Y — отменить и вернуть статус цели. Только в рейде и только когда курсор не в поле
+    // ввода (там Ctrl+Z — обычная отмена печатанного). Ctrl+Shift+Z работает так же: он и в виджете.
+    const raidUndoRef = useRef({ undo: undoRaid, redo: redoRaid });
+    raidUndoRef.current = { undo: undoRaid, redo: redoRaid };
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+            const k = e.key.toLowerCase();
+            if (k !== "z" && k !== "y") return;
+            const el = e.target as HTMLElement | null;
+            if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+            if (!sessionRef.current) return;
+            const { undo, redo } = raidUndoRef.current;
+            const moved = k === "y" || e.shiftKey ? redo() : undo();
+            if (moved) e.preventDefault();
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, []);
+
+    // рейд закончился — вкладка «В рейде» снова закрыта (она всегда видна, но вне рейда недоступна)
+    useEffect(() => {
+        if (!session && tab === "inraid") setTab("quests");
+    }, [session, tab, setTab]);
+
     // ---------- маршрут под текущую позицию ----------
     // Игрок идёт по карте, и порядок целей (как и то, к какой из нескольких вести) должен считаться
     // от него, а не от спавна. Но не на каждом скриншоте: пороги, когда перестроение действительно
@@ -940,6 +1027,7 @@ export default function App() {
         if (a.type === "done") markDone();
         else if (a.type === "skip") skip();
         else if (a.type === "empty") markEmpty();
+        else if (a.type === "undo") undoRaid();
         else if (a.type === "stop") stopRaid();
         else if (a.type === "start") {
             if (raidStartLog) setPromptedRaid(raidStartLog);
@@ -1103,6 +1191,7 @@ export default function App() {
                         <div className="tabs">
                             {(
                                 [
+                                    ["inraid", session ? "● В рейде" : "В рейде"],
                                     ["quests", "Квесты"],
                                     ["raids", `Рейды${plan.raids.length ? ` ${plan.raids.length}` : ""}`],
                                     ["loadout", "Снаряжение"],
@@ -1114,8 +1203,9 @@ export default function App() {
                             ).map(([k, label]) => (
                                 <button
                                     key={k}
-                                    className={(tab === k ? "on" : "") + (k === "settings" ? " tab-icon" : "")}
-                                    title={k === "settings" ? "Настройки" : undefined}
+                                    className={(tab === k ? "on" : "") + (k === "settings" ? " tab-icon" : "") + (k === "inraid" && session ? " raid-on" : "")}
+                                    disabled={k === "inraid" && !session}
+                                    title={k === "settings" ? "Настройки" : k === "inraid" && !session ? "Станет доступно, когда начнётся рейд" : undefined}
                                     aria-label={k === "settings" ? "Настройки" : undefined}
                                     onClick={() => setTab(k)}
                                 >
@@ -1212,6 +1302,30 @@ export default function App() {
                                         overlay={ovState}
                                     />
                                 </>
+                            )}
+                            {tab === "inraid" && gameMap && bundle && (
+                                <InRaidTab
+                                    session={session}
+                                    bundle={bundle}
+                                    players={state.players}
+                                    mapKey={mapKey}
+                                    mapName={gameMap.name}
+                                    target={target}
+                                    activity={hist.entries()}
+                                    canUndo={hist.canUndo}
+                                    canRedo={hist.canRedo}
+                                    undoLabel={hist.undoLabel}
+                                    redoLabel={hist.redoLabel}
+                                    onUndo={undoRaid}
+                                    onRedo={redoRaid}
+                                    onRevert={revertRaid}
+                                    onObjective={markObjective}
+                                    onDoneStop={doneStop}
+                                    onSkipStop={skipStop}
+                                    onEmptyStop={(stopId) => markEmpty(stopId)}
+                                    onFocus={doFocus}
+                                    onStop={stopRaid}
+                                />
                             )}
                             {tab === "settings" && (
                                 <SettingsTab
